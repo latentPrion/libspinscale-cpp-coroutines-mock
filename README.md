@@ -49,6 +49,7 @@ This repository now uses GNU Autotools and defines coroutine theory executables 
 - `automake`
 - `make`
 - A C++ compiler with C++23 coroutine support
+- Boost (`libboost-dev` / distro equivalent) for `boost::asio`
 
 ### Bootstrap and Build (Out-of-Tree)
 
@@ -65,6 +66,7 @@ make -j"$(nproc)"
 ```bash
 ./src/awaitable-returnable-to-caller
 ./src/get-ret-obj-must-return-awaitable
+./src/sync-main-drives-continuation
 ```
 
 ### Add New Theory Executables

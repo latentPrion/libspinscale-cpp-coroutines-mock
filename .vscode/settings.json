@@ -2,9 +2,18 @@
 	"editor.detectIndentation": false,
 	"editor.tabSize": 4,
 	"editor.insertSpaces": false,
+	"editor.inlayHints.enabled": "off",
+	"clangd.inlayHints.enabled": false,
 	"[cpp]": {
 		"editor.detectIndentation": false,
 		"editor.tabSize": 4,
-		"editor.insertSpaces": false
+		"editor.insertSpaces": false,
+		"editor.inlayHints.enabled": "off"
+	},
+	"[c]": {
+		"editor.inlayHints.enabled": "off"
+	},
+	"[cuda-cpp]": {
+		"editor.inlayHints.enabled": "off"
 	}
 }

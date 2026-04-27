@@ -1,0 +1,37 @@
+# Autotools cache and generated configure outputs
+/autom4te.cache/
+/config.log
+/config.status
+/config.h
+/stamp-h1
+
+# In-tree configure/make outputs
+/Makefile
+/src/Makefile
+/src/.deps/
+
+# Preferred out-of-tree build directory
+/build/
+
+# Generic native build artifacts
+*.o
+*.lo
+*.la
+*.a
+*.so
+*.so.*
+*.dylib
+*.dll
+*.exe
+*.out
+
+# Automake/libtool intermediate dependency files
+*.Po
+*.Plo
+*.Tpo
+*.d
+
+# Editor/OS noise
+*~
+.DS_Store
+Thumbs.db

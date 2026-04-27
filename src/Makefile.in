@@ -86,8 +86,7 @@ POST_INSTALL = :
 NORMAL_UNINSTALL = :
 PRE_UNINSTALL = :
 POST_UNINSTALL = :
-bin_PROGRAMS = awaitable-returnable-to-caller$(EXEEXT) \
-	get-ret-obj-must-return-awaitable$(EXEEXT)
+bin_PROGRAMS = sync-main-drives-continuation$(EXEEXT)
 subdir = src
 ACLOCAL_M4 = $(top_srcdir)/aclocal.m4
 am__aclocal_m4_deps = $(top_srcdir)/configure.ac
@@ -100,16 +99,11 @@ CONFIG_CLEAN_FILES =
 CONFIG_CLEAN_VPATH_FILES =
 am__installdirs = "$(DESTDIR)$(bindir)"
 PROGRAMS = $(bin_PROGRAMS)
-am_awaitable_returnable_to_caller_OBJECTS =  \
-	awaitable-returnable-to-caller.$(OBJEXT)
-awaitable_returnable_to_caller_OBJECTS =  \
-	$(am_awaitable_returnable_to_caller_OBJECTS)
-awaitable_returnable_to_caller_LDADD = $(LDADD)
-am_get_ret_obj_must_return_awaitable_OBJECTS =  \
-	get_ret_obj_must_return_awaitable.$(OBJEXT)
-get_ret_obj_must_return_awaitable_OBJECTS =  \
-	$(am_get_ret_obj_must_return_awaitable_OBJECTS)
-get_ret_obj_must_return_awaitable_LDADD = $(LDADD)
+am_sync_main_drives_continuation_OBJECTS =  \
+	sync_main_drives_continuation.$(OBJEXT)
+sync_main_drives_continuation_OBJECTS =  \
+	$(am_sync_main_drives_continuation_OBJECTS)
+sync_main_drives_continuation_LDADD = $(LDADD)
 AM_V_P = $(am__v_P_@AM_V@)
 am__v_P_ = $(am__v_P_@AM_DEFAULT_V@)
 am__v_P_0 = false
@@ -125,8 +119,7 @@ am__v_at_1 =
 DEFAULT_INCLUDES = -I.@am__isrc@ -I$(top_builddir)
 depcomp = $(SHELL) $(top_srcdir)/depcomp
 am__maybe_remake_depfiles = depfiles
-am__depfiles_remade = ./$(DEPDIR)/awaitable-returnable-to-caller.Po \
-	./$(DEPDIR)/get_ret_obj_must_return_awaitable.Po
+am__depfiles_remade = ./$(DEPDIR)/sync_main_drives_continuation.Po
 am__mv = mv -f
 CXXCOMPILE = $(CXX) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) \
 	$(AM_CPPFLAGS) $(CPPFLAGS) $(AM_CXXFLAGS) $(CXXFLAGS)
@@ -141,10 +134,8 @@ AM_V_CXXLD = $(am__v_CXXLD_@AM_V@)
 am__v_CXXLD_ = $(am__v_CXXLD_@AM_DEFAULT_V@)
 am__v_CXXLD_0 = @echo "  CXXLD   " $@;
 am__v_CXXLD_1 = 
-SOURCES = $(awaitable_returnable_to_caller_SOURCES) \
-	$(get_ret_obj_must_return_awaitable_SOURCES)
-DIST_SOURCES = $(awaitable_returnable_to_caller_SOURCES) \
-	$(get_ret_obj_must_return_awaitable_SOURCES)
+SOURCES = $(sync_main_drives_continuation_SOURCES)
+DIST_SOURCES = $(sync_main_drives_continuation_SOURCES)
 am__can_run_installinfo = \
   case $$AM_UPDATE_INFO_DIR in \
     n|no|NO) false;; \
@@ -176,6 +167,8 @@ AUTOCONF = @AUTOCONF@
 AUTOHEADER = @AUTOHEADER@
 AUTOMAKE = @AUTOMAKE@
 AWK = @AWK@
+BOOST_CPPFLAGS = @BOOST_CPPFLAGS@
+BOOST_LDFLAGS = @BOOST_LDFLAGS@
 CPPFLAGS = @CPPFLAGS@
 CSCOPE = @CSCOPE@
 CTAGS = @CTAGS@
@@ -257,9 +250,15 @@ target_alias = @target_alias@
 top_build_prefix = @top_build_prefix@
 top_builddir = @top_builddir@
 top_srcdir = @top_srcdir@
+#	awaitable-returnable-to-caller
+#	get-ret-obj-must-return-awaitable
 AM_CXXFLAGS = -Wall -Wextra -pedantic
-awaitable_returnable_to_caller_SOURCES = awaitable-returnable-to-caller.cpp
-get_ret_obj_must_return_awaitable_SOURCES = get_ret_obj_must_return_awaitable.cpp
+AM_CPPFLAGS = @BOOST_CPPFLAGS@
+AM_LDFLAGS = @BOOST_LDFLAGS@
+
+# awaitable_returnable_to_caller_SOURCES = awaitable-returnable-to-caller.cpp
+# get_ret_obj_must_return_awaitable_SOURCES = get_ret_obj_must_return_awaitable.cpp
+sync_main_drives_continuation_SOURCES = sync_main_drives_continuation.cpp
 all: all-am
 
 .SUFFIXES:
@@ -336,13 +335,9 @@ uninstall-binPROGRAMS:
 clean-binPROGRAMS:
 	-test -z "$(bin_PROGRAMS)" || rm -f $(bin_PROGRAMS)
 
-awaitable-returnable-to-caller$(EXEEXT): $(awaitable_returnable_to_caller_OBJECTS) $(awaitable_returnable_to_caller_DEPENDENCIES) $(EXTRA_awaitable_returnable_to_caller_DEPENDENCIES) 
-	@rm -f awaitable-returnable-to-caller$(EXEEXT)
-	$(AM_V_CXXLD)$(CXXLINK) $(awaitable_returnable_to_caller_OBJECTS) $(awaitable_returnable_to_caller_LDADD) $(LIBS)
-
-get-ret-obj-must-return-awaitable$(EXEEXT): $(get_ret_obj_must_return_awaitable_OBJECTS) $(get_ret_obj_must_return_awaitable_DEPENDENCIES) $(EXTRA_get_ret_obj_must_return_awaitable_DEPENDENCIES) 
-	@rm -f get-ret-obj-must-return-awaitable$(EXEEXT)
-	$(AM_V_CXXLD)$(CXXLINK) $(get_ret_obj_must_return_awaitable_OBJECTS) $(get_ret_obj_must_return_awaitable_LDADD) $(LIBS)
+sync-main-drives-continuation$(EXEEXT): $(sync_main_drives_continuation_OBJECTS) $(sync_main_drives_continuation_DEPENDENCIES) $(EXTRA_sync_main_drives_continuation_DEPENDENCIES) 
+	@rm -f sync-main-drives-continuation$(EXEEXT)
+	$(AM_V_CXXLD)$(CXXLINK) $(sync_main_drives_continuation_OBJECTS) $(sync_main_drives_continuation_LDADD) $(LIBS)
 
 mostlyclean-compile:
 	-rm -f *.$(OBJEXT)
@@ -350,8 +345,7 @@ mostlyclean-compile:
 distclean-compile:
 	-rm -f *.tab.c
 
-@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/awaitable-returnable-to-caller.Po@am__quote@ # am--include-marker
-@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/get_ret_obj_must_return_awaitable.Po@am__quote@ # am--include-marker
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/sync_main_drives_continuation.Po@am__quote@ # am--include-marker
 
 $(am__depfiles_remade):
 	@$(MKDIR_P) $(@D)
@@ -501,8 +495,7 @@ clean: clean-am
 clean-am: clean-binPROGRAMS clean-generic mostlyclean-am
 
 distclean: distclean-am
-		-rm -f ./$(DEPDIR)/awaitable-returnable-to-caller.Po
-	-rm -f ./$(DEPDIR)/get_ret_obj_must_return_awaitable.Po
+		-rm -f ./$(DEPDIR)/sync_main_drives_continuation.Po
 	-rm -f Makefile
 distclean-am: clean-am distclean-compile distclean-generic \
 	distclean-tags
@@ -548,8 +541,7 @@ install-ps-am:
 installcheck-am:
 
 maintainer-clean: maintainer-clean-am
-		-rm -f ./$(DEPDIR)/awaitable-returnable-to-caller.Po
-	-rm -f ./$(DEPDIR)/get_ret_obj_must_return_awaitable.Po
+		-rm -f ./$(DEPDIR)/sync_main_drives_continuation.Po
 	-rm -f Makefile
 maintainer-clean-am: distclean-am maintainer-clean-generic
 

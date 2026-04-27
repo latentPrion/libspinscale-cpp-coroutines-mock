@@ -49,6 +49,39 @@ AC_COMPILE_IFELSE(
 	]
 )
 
+AC_CHECK_HEADER([boost/asio/io_context.hpp], [], [
+	AC_MSG_ERROR([Boost.Asio headers are required (boost/asio/io_context.hpp).])
+])
+
+BOOST_CPPFLAGS=""
+BOOST_LDFLAGS="-lboost_system -pthread"
+AC_SUBST([BOOST_CPPFLAGS])
+AC_SUBST([BOOST_LDFLAGS])
+
+AC_MSG_CHECKING([whether Boost.Asio links with -lboost_system -pthread])
+saved_LIBS="$LIBS"
+LIBS="$LIBS $BOOST_LDFLAGS"
+AC_LINK_IFELSE(
+	[AC_LANG_PROGRAM(
+		[[
+			#include <boost/asio/io_context.hpp>
+		]],
+		[[
+			boost::asio::io_context io;
+			(void)io;
+			return 0;
+		]]
+	)],
+	[
+		AC_MSG_RESULT([yes])
+	],
+	[
+		AC_MSG_RESULT([no])
+		AC_MSG_ERROR([Failed to link a minimal Boost.Asio program.])
+	]
+)
+LIBS="$saved_LIBS"
+
 AC_CONFIG_FILES([
 	Makefile
 	src/Makefile
