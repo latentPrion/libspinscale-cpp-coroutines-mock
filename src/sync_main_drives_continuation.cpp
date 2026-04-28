@@ -29,7 +29,8 @@ boost::asio::executor_work_guard<
 
 struct ReturnValues
 {
-	ReturnValues() noexcept : myExceptionPtr(myMemberExceptionPtr)
+	ReturnValues() noexcept
+	: myExceptionPtr(myMemberExceptionPtr)
 	{}
 	ReturnValues(std::exception_ptr &callerExceptionPtr) noexcept
 	: myExceptionPtr(callerExceptionPtr)
@@ -65,7 +66,7 @@ public:
 	void setCallerIoContext(boost::asio::io_context &_callerIoContext) noexcept
 		{ calleePromise.callerIoContext = _callerIoContext; }
 
-	void await_resume() const noexcept
+	void await_resume() const
 	{
 		std::cout << __func__ << ": " << std::this_thread::get_id() << " About to check for and rethrow any exception.\n";
 		if (returnValues->myExceptionPtr) {
@@ -104,7 +105,6 @@ struct PostingPromise
 	: returnValues(std::make_shared<ReturnValues>(_callerExceptionPtr)),
 	callerLambda(_callerLambda)
 	{}
-
 	
 	void unhandled_exception() noexcept
 	{
@@ -236,7 +236,7 @@ struct ViralSuspendingInvoker
 		std::cout << __func__ << ": " << std::this_thread::get_id() << " Setting callerSchedHandle and 'suspending'.\n";
 		setCallerSchedHandle(callerSchedHandle);
 	}
-	void await_resume() const noexcept
+	void await_resume() const
 	{
 		std::cout << __func__ << ": " << std::this_thread::get_id() << " Resumed on caller thread, hopefully.\n";
 		PostingInvoker<BodyPostingPromise>::await_resume();
@@ -247,6 +247,7 @@ ViralSuspendingInvoker print2Strings(std::string arg1, std::string arg2)
 {
 	std::cout << __func__ << ": " << std::this_thread::get_id() << " Executing.\n";
 	std::cout << __func__ << ": " << std::this_thread::get_id() << " arg1: " << arg1 << "\n";
+	throw "KEK!";
 	std::cout << __func__ << ": " << std::this_thread::get_id() << " arg2: " << arg2 << "\n";
 	co_return;
 }
@@ -329,7 +330,9 @@ int main() {
 		{
 			keep_looping = false;
 			mainIoContext.stop();
-			std::rethrow_exception(initializeCReqExceptionPtr);
+			if (initializeCReqExceptionPtr) {
+				std::rethrow_exception(initializeCReqExceptionPtr);
+			}
 		}
 	});
 	std::cout << __func__ << ": " << std::this_thread::get_id() << " initializeCReq returned.\n";
