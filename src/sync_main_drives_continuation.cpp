@@ -6,6 +6,7 @@
 #include <thread>
 #include <functional>
 #include <type_traits>
+#include <utility>
 #include <boost/asio/io_context.hpp>
 #include <boost/asio/post.hpp>
 #include <boost/asio/signal_set.hpp>
@@ -27,6 +28,42 @@ boost::asio::io_context mainIoContext, bodyIoContext;
 boost::asio::executor_work_guard<
 	boost::asio::io_context::executor_type> bodyIoContextIdleDoesNotEndRun(
 		bodyIoContext.get_executor());	
+
+struct CalleeCoroutineHandleDestroyer
+{
+	CalleeCoroutineHandleDestroyer() noexcept = default;
+
+	explicit CalleeCoroutineHandleDestroyer(std::coroutine_handle<> schedHandle) noexcept
+	: selfSchedHandle(schedHandle)
+	{}
+
+	CalleeCoroutineHandleDestroyer(CalleeCoroutineHandleDestroyer &&other) noexcept
+	: selfSchedHandle(std::exchange(other.selfSchedHandle, {}))
+	{}
+
+	CalleeCoroutineHandleDestroyer &operator=(CalleeCoroutineHandleDestroyer &&other) noexcept
+	{
+		if (this != &other) {
+			if (selfSchedHandle) {
+				selfSchedHandle.destroy();
+			}
+			selfSchedHandle = std::exchange(other.selfSchedHandle, {});
+		}
+		return *this;
+	}
+
+	~CalleeCoroutineHandleDestroyer() noexcept
+	{
+		if (selfSchedHandle) {
+			selfSchedHandle.destroy();
+		}
+	}
+
+	CalleeCoroutineHandleDestroyer(const CalleeCoroutineHandleDestroyer &) = delete;
+	CalleeCoroutineHandleDestroyer &operator=(const CalleeCoroutineHandleDestroyer &) = delete;
+
+	std::coroutine_handle<> selfSchedHandle;
+};
 
 template <typename T, bool IsVoid = std::is_void_v<T>>
 struct ReturnValueStorage;
@@ -99,19 +136,15 @@ public:
 	auto await_resume() const
 	{
 		ReturnValues<T> &returnValues = calleePromise.returnValues;
+		CalleeCoroutineHandleDestroyer completion(calleePromise.selfSchedHandle);
 		std::cout << __func__ << ": " << std::this_thread::get_id() << " About to check for and rethrow any exception.\n";
 		if (returnValues.myExceptionPtr) {
-			std::exception_ptr exceptionPtr = returnValues.myExceptionPtr;
-			calleePromise.selfSchedHandle.destroy();
-			std::rethrow_exception(exceptionPtr);
+			std::rethrow_exception(returnValues.myExceptionPtr);
 		}
 		else if constexpr (!std::is_void_v<T>) {
-			T returnValue = std::move(returnValues.myReturnValue);
-			calleePromise.selfSchedHandle.destroy();
-			return returnValue;
+			return std::move(returnValues.myReturnValue);
 		}
 		else {
-			calleePromise.selfSchedHandle.destroy();
 			return;
 		}
 	}
@@ -153,7 +186,7 @@ struct PostingPromise
 
 	PostingPromise(
 		std::exception_ptr &_callerExceptionPtr,
-		std::function<void(std::coroutine_handle<>)> _callerLambda) noexcept
+		std::function<void(CalleeCoroutineHandleDestroyer)> _callerLambda) noexcept
 	: returnValues(_callerExceptionPtr),
 	callerLambda(std::move(_callerLambda))
 	{}
@@ -179,7 +212,7 @@ struct PostingPromise
 		{
 			std::cout << __func__ << ": " << std::this_thread::get_id() << " About to post-back lambda to mainIoContext.\n";
 			boost::asio::post(callerIoContext, [this] {
-				callerLambda(selfSchedHandle);
+				callerLambda(CalleeCoroutineHandleDestroyer(selfSchedHandle));
 			});
 		}
 		else {
@@ -203,7 +236,7 @@ struct PostingPromise
 	 * Doing it this way enables us to use suspend_never in final_suspend().
 	 */
 	ReturnValues<T> returnValues;
-	std::function<void(std::coroutine_handle<>)> callerLambda;
+	std::function<void(CalleeCoroutineHandleDestroyer)> callerLambda;
 	boost::asio::io_context &callerIoContext = current_io_context();
 	std::coroutine_handle<> selfSchedHandle;
 	std::coroutine_handle<void> callerSchedHandle;
@@ -228,7 +261,7 @@ struct BodyPostingPromise
 
 	BodyPostingPromise(
 		std::exception_ptr &_exceptionPtr,
-		std::function<void(std::coroutine_handle<>)> _callerLambda) noexcept
+		std::function<void(CalleeCoroutineHandleDestroyer)> _callerLambda) noexcept
 	:	PostingPromise<T>(_exceptionPtr, std::move(_callerLambda))
 	{
 		initializeSelfSchedHandle();
@@ -328,7 +361,7 @@ ViralSuspendingInvoker<std::string> print2Strings(std::string arg1, std::string 
 }
 
 NonViralNonSuspendingInvoker initializeCReq(
-	std::exception_ptr &, std::function<void(std::coroutine_handle<>)>)
+	std::exception_ptr &, std::function<void(CalleeCoroutineHandleDestroyer)>)
 {
 	std::cout << __func__ << ": " << std::this_thread::get_id() << " Executing.\n";
 	// throw std::runtime_error("initializeCReq exception");
@@ -398,22 +431,15 @@ int main() {
 	std::exception_ptr initializeCReqExceptionPtr = nullptr;
 	initializeCReq(
 		initializeCReqExceptionPtr,
-		[&initializeCReqExceptionPtr, &keep_looping]
-		(std::coroutine_handle<> calleeSchedHandle)
+		[&initializeCReqExceptionPtr, &keep_looping] (CalleeCoroutineHandleDestroyer)
 	{
-		/**	CAVEAT:
-		 * The call to calleeSchedHandle.destroy must always be the last statement
-		 * in lambdas for this pattern.
-		 */
 		std::cout << __func__ << ": " << std::this_thread::get_id() << " About to check if initializeCReq threw an exception.\n";
 		if (initializeCReqExceptionPtr)
 		{
 			keep_looping = false;
 			mainIoContext.stop();
-			calleeSchedHandle.destroy();
 			std::rethrow_exception(initializeCReqExceptionPtr);
 		}
-		calleeSchedHandle.destroy();
 	});
 	std::cout << __func__ << ": " << std::this_thread::get_id() << " initializeCReq returned.\n";
 
