@@ -28,8 +28,23 @@ boost::asio::executor_work_guard<
 	boost::asio::io_context::executor_type> bodyIoContextIdleDoesNotEndRun(
 		bodyIoContext.get_executor());	
 
+template <typename T, bool IsVoid = std::is_void_v<T>>
+struct ReturnValueStorage;
+
+template <typename T>
+struct ReturnValueStorage<T, false>
+{
+	T myReturnValue{};
+};
+
+template <typename T>
+struct ReturnValueStorage<T, true>
+{
+};
+
 template <typename T>
 struct ReturnValues
+: public ReturnValueStorage<T>
 {
 	ReturnValues() noexcept
 	: myExceptionPtr(myMemberExceptionPtr)
@@ -53,27 +68,6 @@ struct ReturnValues
 	 * which is used for viral coroutines that can bubble their exception
 	 * up and automatically via the language runtime.
 	 */
-	std::exception_ptr &myExceptionPtr;
-	std::exception_ptr myMemberExceptionPtr = nullptr;
-	T myReturnValue{};
-};
-
-template <>
-struct ReturnValues<void>
-{
-	ReturnValues() noexcept
-	: myExceptionPtr(myMemberExceptionPtr)
-	{}
-
-	explicit ReturnValues(std::exception_ptr &callerExceptionPtr) noexcept
-	: myExceptionPtr(callerExceptionPtr)
-	{}
-
-	~ReturnValues() noexcept
-	{
-		std::cout << __func__ << ": " << std::this_thread::get_id() << " Destructing.\n";
-	}
-
 	std::exception_ptr &myExceptionPtr;
 	std::exception_ptr myMemberExceptionPtr = nullptr;
 };
