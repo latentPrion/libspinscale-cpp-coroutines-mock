@@ -76,10 +76,8 @@ template <typename PromiseType, typename T>
 class PostingInvoker
 {
 public:
-	PostingInvoker(
-		PromiseType &_calleePromise,
-		std::shared_ptr<ReturnValues<T>> _returnValues) noexcept
-	: calleePromise(_calleePromise), returnValues(_returnValues)
+	explicit PostingInvoker(PromiseType &_calleePromise) noexcept
+	: calleePromise(_calleePromise)
 	{}
 
 	~PostingInvoker() noexcept = default;
@@ -100,18 +98,26 @@ public:
 
 	auto await_resume() const
 	{
+		ReturnValues<T> &returnValues = calleePromise.returnValues;
 		std::cout << __func__ << ": " << std::this_thread::get_id() << " About to check for and rethrow any exception.\n";
-		if (returnValues->myExceptionPtr) {
-			std::rethrow_exception(returnValues->myExceptionPtr);
+		if (returnValues.myExceptionPtr) {
+			std::exception_ptr exceptionPtr = returnValues.myExceptionPtr;
+			calleePromise.selfSchedHandle.destroy();
+			std::rethrow_exception(exceptionPtr);
 		}
-		if constexpr (!std::is_void_v<T>) {
-			return std::move(returnValues->myReturnValue);
+		else if constexpr (!std::is_void_v<T>) {
+			T returnValue = std::move(returnValues.myReturnValue);
+			calleePromise.selfSchedHandle.destroy();
+			return returnValue;
+		}
+		else {
+			calleePromise.selfSchedHandle.destroy();
+			return;
 		}
 	}
 
 private:
 	PromiseType &calleePromise;
-	std::shared_ptr<ReturnValues<T>> returnValues;
 };
 
 template <typename T>
@@ -125,7 +131,7 @@ struct BodyPostingPromiseReturnOps<PromiseType, T, false>
 {
 	void return_value(T returnValue) noexcept
 	{
-		static_cast<PromiseType *>(this)->returnValues->myReturnValue = std::move(returnValue);
+		static_cast<PromiseType *>(this)->returnValues.myReturnValue = std::move(returnValue);
 	}
 };
 
@@ -142,16 +148,14 @@ template <typename T>
 struct PostingPromise
 {
 	PostingPromise() noexcept
-	// TODO: Add a SLAM cache and use it as this sh_ptr's Allocator here.
-	: returnValues(std::make_shared<ReturnValues<T>>())
+	: returnValues()
 	{}
 
 	PostingPromise(
 		std::exception_ptr &_callerExceptionPtr,
-		std::function<void()> _callerLambda) noexcept
-	// TODO: Add a SLAM cache and use it as this sh_ptr's Allocator here.
-	: returnValues(std::make_shared<ReturnValues<T>>(_callerExceptionPtr)),
-	callerLambda(_callerLambda)
+		std::function<void(std::coroutine_handle<>)> _callerLambda) noexcept
+	: returnValues(_callerExceptionPtr),
+	callerLambda(std::move(_callerLambda))
 	{}
 
 	~PostingPromise() noexcept
@@ -161,10 +165,10 @@ struct PostingPromise
 
 	void unhandled_exception() noexcept
 	{
-		returnValues->myExceptionPtr = std::current_exception();
+		returnValues.myExceptionPtr = std::current_exception();
 	}
 
-	std::suspend_never final_suspend() noexcept
+	std::suspend_always final_suspend() noexcept
 	{
 		if (callerSchedHandle)
 		{
@@ -174,12 +178,14 @@ struct PostingPromise
 		else if (callerLambda)
 		{
 			std::cout << __func__ << ": " << std::this_thread::get_id() << " About to post-back lambda to mainIoContext.\n";
-			boost::asio::post(callerIoContext, callerLambda);
+			boost::asio::post(callerIoContext, [this] {
+				callerLambda(selfSchedHandle);
+			});
 		}
 		else {
-			std::cout << __func__ << ": " << std::this_thread::get_id() << " No mechanism provided to post-back to caller..\n";
+			std::cout << __func__ << ": " << std::this_thread::get_id() << " No mechanism provided to post-back to caller. Coroutine frame will leak.\n";
 		}
-		std::cout << __func__ << ": " << std::this_thread::get_id() << " Returning suspend_never.\n";
+		std::cout << __func__ << ": " << std::this_thread::get_id() << " Returning suspend_always.\n";
 		return {};
 	}
 
@@ -196,11 +202,17 @@ struct PostingPromise
 	 *
 	 * Doing it this way enables us to use suspend_never in final_suspend().
 	 */
-	std::shared_ptr<ReturnValues<T>> returnValues;
-	std::function<void()> callerLambda;
+	ReturnValues<T> returnValues;
+	std::function<void(std::coroutine_handle<>)> callerLambda;
 	boost::asio::io_context &callerIoContext = current_io_context();
+	std::coroutine_handle<> selfSchedHandle;
 	std::coroutine_handle<void> callerSchedHandle;
-	std::unique_ptr<PostingInvoker<BodyPostingPromise<T>, T>> callerInvoker;
+
+protected:
+	void setSelfSchedHandle(std::coroutine_handle<> schedHandle) noexcept
+	{
+		selfSchedHandle = schedHandle;
+	}
 };
 
 template <typename T>
@@ -210,24 +222,32 @@ struct BodyPostingPromise
 {
 	BodyPostingPromise() noexcept
 	:	PostingPromise<T>()
-	{}
+	{
+		initializeSelfSchedHandle();
+	}
 
 	BodyPostingPromise(
 		std::exception_ptr &_exceptionPtr,
-		std::function<void()> _final_suspend_postback) noexcept
-	:	PostingPromise<T>(_exceptionPtr, _final_suspend_postback)
-	{}
+		std::function<void(std::coroutine_handle<>)> _callerLambda) noexcept
+	:	PostingPromise<T>(_exceptionPtr, std::move(_callerLambda))
+	{
+		initializeSelfSchedHandle();
+	}
 
 	std::suspend_always initial_suspend() noexcept
 	{
 		std::cout << __func__ << ": " << std::this_thread::get_id() << " About to post to bodyIoContext.\n";
-		boost::asio::post(bodyIoContext, selfSchedHandle);
+		boost::asio::post(bodyIoContext, this->selfSchedHandle);
 		std::cout << __func__ << ": " << std::this_thread::get_id() << " Returning suspend_always.\n";
 		return {};
 	}
 
-	std::coroutine_handle<BodyPostingPromise<T>> selfSchedHandle
-		= std::coroutine_handle<BodyPostingPromise<T>>::from_promise(*this);
+private:
+	void initializeSelfSchedHandle() noexcept
+	{
+		this->setSelfSchedHandle(
+			std::coroutine_handle<BodyPostingPromise<T>>::from_promise(*this));
+	}
 };
 
 struct NonViralNonSuspendingInvoker
@@ -237,10 +257,13 @@ struct NonViralNonSuspendingInvoker
 	:	public BodyPostingPromise<void>
 	{
 		using BodyPostingPromise<void>::BodyPostingPromise;
-		NonViralNonSuspendingInvoker get_return_object() noexcept
+		NonViralNonSuspendingInvoker get_return_object()
 		{
 			std::cout << __func__ << ": " << std::this_thread::get_id() << " Returning NonViralNonSuspendingInvoker.\n";
-			return NonViralNonSuspendingInvoker(*this, this->returnValues);
+			if (!this->callerLambda) {
+				throw std::runtime_error("Missing completion lambda: non-viral coroutine would leak frame because no destroy() owner was provided.");
+			}
+			return NonViralNonSuspendingInvoker(*this);
 		}
 	};
 
@@ -272,7 +295,7 @@ struct ViralSuspendingInvoker
 		ViralSuspendingInvoker<T> get_return_object() noexcept
 		{
 			std::cout << __func__ << ": " << std::this_thread::get_id() << " Returning ViralSuspendingInvoker.\n";
-			return ViralSuspendingInvoker<T>(*this, this->returnValues);
+			return ViralSuspendingInvoker<T>(*this);
 		}
 	};
 
@@ -305,7 +328,7 @@ ViralSuspendingInvoker<std::string> print2Strings(std::string arg1, std::string 
 }
 
 NonViralNonSuspendingInvoker initializeCReq(
-	std::exception_ptr &, std::function<void()>)
+	std::exception_ptr &, std::function<void(std::coroutine_handle<>)>)
 {
 	std::cout << __func__ << ": " << std::this_thread::get_id() << " Executing.\n";
 	// throw std::runtime_error("initializeCReq exception");
@@ -376,16 +399,21 @@ int main() {
 	initializeCReq(
 		initializeCReqExceptionPtr,
 		[&initializeCReqExceptionPtr, &keep_looping]
+		(std::coroutine_handle<> calleeSchedHandle)
 	{
+		/**	CAVEAT:
+		 * The call to calleeSchedHandle.destroy must always be the last statement
+		 * in lambdas for this pattern.
+		 */
 		std::cout << __func__ << ": " << std::this_thread::get_id() << " About to check if initializeCReq threw an exception.\n";
 		if (initializeCReqExceptionPtr)
 		{
 			keep_looping = false;
 			mainIoContext.stop();
-			if (initializeCReqExceptionPtr) {
-				std::rethrow_exception(initializeCReqExceptionPtr);
-			}
+			calleeSchedHandle.destroy();
+			std::rethrow_exception(initializeCReqExceptionPtr);
 		}
+		calleeSchedHandle.destroy();
 	});
 	std::cout << __func__ << ": " << std::this_thread::get_id() << " initializeCReq returned.\n";
 
