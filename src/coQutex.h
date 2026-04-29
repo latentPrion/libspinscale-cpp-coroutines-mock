@@ -112,7 +112,8 @@ private:
 
 #include "promiseChainLink.h"
 
-class CoQutex::ReleaseHandle
+class [[nodiscard("store co_await result; lock is held until ReleaseHandle is released")]]
+CoQutex::ReleaseHandle
 {
 public:
 	ReleaseHandle(PromiseChainLink &promiseChainLinkIn, CoQutex &coQutexIn) noexcept
@@ -149,13 +150,19 @@ public:
 		coQutex.release();
 	}
 
+	void operator()() noexcept
+	{
+		release();
+	}
+
 private:
 	PromiseChainLink &promiseChainLink;
 	CoQutex &coQutex;
 	bool armed = true;
 };
 
-inline CoQutex::ReleaseHandle CoQutex::AcquireInvocationAndSuspensionPolicy::await_resume() noexcept
+inline CoQutex::ReleaseHandle
+CoQutex::AcquireInvocationAndSuspensionPolicy::await_resume() noexcept
 {
 	assert(acquirerChainLink != nullptr);
 	acquirerChainLink->addAcquiredLock(coQutex);
