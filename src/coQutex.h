@@ -82,6 +82,7 @@ public:
 			return true;
 		}
 
+		[[nodiscard("store co_await result; lock is held until ReleaseHandle is released")]]
 		ReleaseHandle await_resume() noexcept;
 
 		CoQutex &coQutex;
@@ -169,6 +170,7 @@ private:
 	bool armed = true;
 };
 
+[[nodiscard("store co_await result; lock is held until ReleaseHandle is released")]]
 inline CoQutex::ReleaseHandle
 CoQutex::AcquireInvocationAndSuspensionPolicy::await_resume() noexcept
 {
