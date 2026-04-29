@@ -20,7 +20,23 @@ public:
 	~PostingInvoker() noexcept = default;
 
 	void setCallerSchedHandle(std::coroutine_handle<void> _callerSchedHandle) noexcept
-		{ calleePromise.callerSchedHandle = _callerSchedHandle; }
+	{
+		calleePromise.callerSchedHandle = _callerSchedHandle;
+		calleePromise.setCallerPromiseChainLink(nullptr);
+	}
+
+	template <typename CallerPromise>
+	void setCallerSchedHandle(std::coroutine_handle<CallerPromise> callerSchedHandle) noexcept
+	{
+		static_assert(
+			std::is_base_of_v<PromiseChainLink, CallerPromise>,
+			"PostingInvoker caller promise must derive from PromiseChainLink");
+
+		calleePromise.callerSchedHandle =
+			std::coroutine_handle<void>::from_address(callerSchedHandle.address());
+
+		calleePromise.setCallerPromiseChainLink(&callerSchedHandle.promise());
+	}
 
 	/**	EXPLANATION:
 	 * Used in the exceptional edge case where the caller obtains the

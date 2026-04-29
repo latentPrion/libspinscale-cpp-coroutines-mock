@@ -26,20 +26,43 @@ public:
 	void addAcquiredLock(CoQutex &coQutex) noexcept
 		{ acquiredLocks.emplace_back(std::ref(coQutex)); }
 
+	bool holdsAcquiredLock(const CoQutex &coQutex) const noexcept
+		{ return findMatchingAcquiredLock(coQutex) != acquiredLocks.end(); }
+
 	virtual void removeAcquiredLock(CoQutex &coQutex) noexcept = 0;
 
 protected:
-	void eraseFirstMatchingAcquiredLock(CoQutex &coQutex) noexcept
+	using AcquiredLockList = std::list<std::reference_wrapper<CoQutex>>;
+
+	AcquiredLockList::iterator findMatchingAcquiredLock(CoQutex &coQutex) noexcept
 	{
 		for (auto it = acquiredLocks.begin(); it != acquiredLocks.end(); ++it) {
 			if (&it->get() == &coQutex) {
-				acquiredLocks.erase(it);
-				return;
+				return it;
 			}
+		}
+		return acquiredLocks.end();
+	}
+
+	AcquiredLockList::const_iterator findMatchingAcquiredLock(const CoQutex &coQutex) const noexcept
+	{
+		for (auto it = acquiredLocks.begin(); it != acquiredLocks.end(); ++it) {
+			if (&it->get() == &coQutex) {
+				return it;
+			}
+		}
+		return acquiredLocks.end();
+	}
+
+	void eraseFirstMatchingAcquiredLock(CoQutex &coQutex) noexcept
+	{
+		auto match = findMatchingAcquiredLock(coQutex);
+		if (match != acquiredLocks.end()) {
+			acquiredLocks.erase(match);
 		}
 	}
 
-	std::list<std::reference_wrapper<CoQutex>> acquiredLocks;
+	AcquiredLockList acquiredLocks;
 };
 
 #endif // PROMISE_CHAIN_LINK_H

@@ -85,8 +85,12 @@ struct ViralSuspendingInvoker
 		std::cout << __func__ << ": " << std::this_thread::get_id() << " Returning false.\n";
 		return false;
 	}
-	void await_suspend(std::coroutine_handle<> callerSchedHandle) noexcept
+	template <typename CallerPromise>
+	void await_suspend(std::coroutine_handle<CallerPromise> callerSchedHandle) noexcept
 	{
+		static_assert(
+			std::is_base_of_v<PromiseChainLink, CallerPromise>,
+			"ViralSuspendingInvoker caller promise must derive from PromiseChainLink");
 		std::cout << __func__ << ": " << std::this_thread::get_id() << " Setting callerSchedHandle and 'suspending'.\n";
 		this->setCallerSchedHandle(callerSchedHandle);
 	}
@@ -99,20 +103,25 @@ struct ViralSuspendingInvoker
 
 ViralSuspendingInvoker<std::string> print2Strings(std::string arg1, std::string arg2)
 {
+	CoQutex print2StringsLock;
 	std::cout << __func__ << ": " << std::this_thread::get_id() << " Executing.\n";
 	std::cout << __func__ << ": " << std::this_thread::get_id() << " arg1: " << arg1 << "\n";
 //	throw "KEK!";
 	std::cout << __func__ << ": " << std::this_thread::get_id() << " arg2: " << arg2 << "\n";
+	auto r = co_await print2StringsLock.getAcquireInvocationAndSuspensionPolicy();
 	co_return arg1 + " " + arg2;
 }
 
 NonViralNonSuspendingInvoker initializeCReq(
 	std::exception_ptr &, std::function<void(CalleeCoroutineHandleDestroyer)>)
 {
+	CoQutex initializeCReqLock;
 	std::cout << __func__ << ": " << std::this_thread::get_id() << " Executing.\n";
 	// throw std::runtime_error("initializeCReq exception");
 	std::cout << __func__ << ": " << std::this_thread::get_id() << " About to co_await print2Strings.\n";
+	/*auto r2 = */co_await initializeCReqLock.getAcquireInvocationAndSuspensionPolicy();
 	std::string returnedString = co_await print2Strings("Hello", "World");
+	auto r3 = co_await initializeCReqLock.getAcquireInvocationAndSuspensionPolicy();
 	std::cout << __func__ << ": " << std::this_thread::get_id() << " print2Strings returned: " << returnedString << "\n";
 	co_return;
 }

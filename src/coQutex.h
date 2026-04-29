@@ -4,6 +4,7 @@
 #include <cassert>
 #include <coroutine>
 #include <list>
+#include <stdexcept>
 #include <type_traits>
 
 #include <boost/asio/io_context.hpp>
@@ -52,7 +53,7 @@ public:
 		bool await_ready() noexcept { return false; }
 
 		template <typename Promise>
-		bool await_suspend(std::coroutine_handle<Promise> callerSchedHandle) noexcept
+		bool await_suspend(std::coroutine_handle<Promise> callerSchedHandle)
 		{
 			static_assert(
 				std::is_base_of_v<PromiseChainLink, Promise>,
@@ -62,9 +63,14 @@ public:
 
 			walkCallerPromiseChainFrom(
 				static_cast<const PromiseChainLink &>(callerSchedHandle.promise()),
-				[](const PromiseChainLink &) noexcept {});
+				[this](const PromiseChainLink &link)
+				{
+					if (link.holdsAcquiredLock(coQutex)) {
+						throw std::runtime_error("Deadlock detected: CoQutex re-acquire on caller promise chain.");
+					}
+				});
 
-				sscl::SpinLock::Guard guard(coQutex.spinLock);
+			sscl::SpinLock::Guard guard(coQutex.spinLock);
 			if (!coQutex.isOwned) {
 				coQutex.isOwned = true;
 				return false;

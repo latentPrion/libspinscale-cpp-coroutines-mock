@@ -17,6 +17,9 @@
 
 extern boost::asio::io_context bodyIoContext;
 
+template <typename PromiseType, typename T>
+class PostingInvoker;
+
 struct CalleeCoroutineHandleDestroyer
 {
 	CalleeCoroutineHandleDestroyer() noexcept = default;
@@ -151,6 +154,12 @@ struct PostingPromise
 		eraseFirstMatchingAcquiredLock(coQutex);
 	}
 
+	const PromiseChainLink *callerPromiseChainLink() const noexcept override
+		{ return callerChainLink; }
+
+	PromiseChainLink *callerPromiseChainLink() noexcept override
+		{ return callerChainLink; }
+
 	std::suspend_always final_suspend() noexcept
 	{
 		if (callerSchedHandle)
@@ -190,12 +199,21 @@ struct PostingPromise
 	boost::asio::io_context &callerIoContext = current_io_context();
 	std::coroutine_handle<> selfSchedHandle;
 	std::coroutine_handle<void> callerSchedHandle;
+	PromiseChainLink *callerChainLink = nullptr;
 
 protected:
 	void setSelfSchedHandle(std::coroutine_handle<> schedHandle) noexcept
 	{
 		selfSchedHandle = schedHandle;
 	}
+
+	void setCallerPromiseChainLink(PromiseChainLink *chainLink) noexcept
+	{
+		callerChainLink = chainLink;
+	}
+
+	template <typename, typename>
+	friend class PostingInvoker;
 };
 
 template <typename T>
