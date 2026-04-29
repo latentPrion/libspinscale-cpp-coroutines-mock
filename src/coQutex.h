@@ -13,11 +13,12 @@
 #include "spinlock.h"
 
 class PromiseChainLink;
-class ReleaseHandle;
 
 class CoQutex
 {
 public:
+	class ReleaseHandle;
+
 	CoQutex() noexcept = default;
 	CoQutex(const CoQutex &) = delete;
 	CoQutex(CoQutex &&) noexcept = delete;
@@ -111,7 +112,7 @@ private:
 
 #include "promiseChainLink.h"
 
-class ReleaseHandle
+class CoQutex::ReleaseHandle
 {
 public:
 	ReleaseHandle(PromiseChainLink &promiseChainLinkIn, CoQutex &coQutexIn) noexcept
@@ -154,11 +155,11 @@ private:
 	bool armed = true;
 };
 
-inline ReleaseHandle CoQutex::AcquireInvocationAndSuspensionPolicy::await_resume() noexcept
+inline CoQutex::ReleaseHandle CoQutex::AcquireInvocationAndSuspensionPolicy::await_resume() noexcept
 {
 	assert(acquirerChainLink != nullptr);
 	acquirerChainLink->addAcquiredLock(coQutex);
-	return ReleaseHandle(*acquirerChainLink, coQutex);
+	return CoQutex::ReleaseHandle(*acquirerChainLink, coQutex);
 }
 
 #endif // CO_QUTEX_H
