@@ -1,21 +1,54 @@
 #ifndef CO_QUTEX_H
 #define CO_QUTEX_H
 
-#include <list>
+#include <cassert>
 #include <coroutine>
+#include <list>
+#include <type_traits>
+
 #include <boost/asio/io_context.hpp>
 #include <boost/asio/post.hpp>
 
 #include "current_io_context.h"
 #include "spinlock.h"
 
+class PromiseChainLink;
+
+class CoQutex;
+
+class ReleaseHandle
+{
+public:
+	ReleaseHandle(PromiseChainLink &promiseChainLinkIn, CoQutex &coQutexIn) noexcept
+	: promiseChainLink(promiseChainLinkIn),
+	coQutex(coQutexIn)
+	{}
+
+	ReleaseHandle(const ReleaseHandle &) = delete;
+	ReleaseHandle &operator=(const ReleaseHandle &) = delete;
+
+	ReleaseHandle(ReleaseHandle &&other) noexcept;
+	ReleaseHandle &operator=(ReleaseHandle &&other) noexcept = delete;
+
+	~ReleaseHandle() noexcept;
+
+	void release() noexcept;
+
+private:
+	PromiseChainLink &promiseChainLink;
+	CoQutex &coQutex;
+	bool armed = true;
+};
+
 class CoQutex
 {
 public:
-	CoQutex() noexcept;
-	CoQutex(const CoQutex&) = delete;
-	CoQutex(CoQutex&&) noexcept;
-	~CoQutex();
+	CoQutex() noexcept = default;
+	CoQutex(const CoQutex &) = delete;
+	CoQutex(CoQutex &&) noexcept = delete;
+	CoQutex &operator=(const CoQutex &) = delete;
+	CoQutex &operator=(CoQutex &&) noexcept = delete;
+	~CoQutex() = default;
 
 	struct AcquireInvocationAndSuspensionPolicy
 	{
@@ -29,30 +62,46 @@ public:
 		{
 			WaitingCoroutine(
 				std::coroutine_handle<void> _callerSchedHandle,
-				boost::asio::io_context &_callerIoContext) noexcept
-			: callerSchedHandle(_callerSchedHandle), callerIoContext(_callerIoContext)
+				boost::asio::io_context &_callerIoContext,
+				PromiseChainLink &_waitingPromise) noexcept
+			: callerSchedHandle(_callerSchedHandle),
+			callerIoContext(_callerIoContext),
+			waitingPromise(_waitingPromise)
 			{}
 
 			std::coroutine_handle<void> callerSchedHandle;
 			boost::asio::io_context &callerIoContext;
+			PromiseChainLink &waitingPromise;
 		};
 
 		bool await_ready() noexcept { return false; }
-		bool await_suspend(std::coroutine_handle<void> callerSchedHandle) noexcept
+
+		template <typename Promise>
+		bool await_suspend(std::coroutine_handle<Promise> callerSchedHandle) noexcept
 		{
+			static_assert(
+				std::is_base_of_v<PromiseChainLink, Promise>,
+				"CoQutex acquire requires a promise type derived from PromiseChainLink");
+
+			acquirerChainLink = &callerSchedHandle.promise();
 			sscl::SpinLock::Guard guard(coQutex.spinLock);
-			if (!coQutex.isOwned)
-			{
+			if (!coQutex.isOwned) {
 				coQutex.isOwned = true;
 				return false;
 			}
-
-			coQutex.waitingCoroutines.emplace_back(callerSchedHandle, current_io_context());
+			coQutex.waitingCoroutines.emplace_back(
+				std::coroutine_handle<void>::from_address(callerSchedHandle.address()),
+				current_io_context(),
+				*acquirerChainLink);
 			return true;
 		}
-		void await_resume() noexcept { /* nothing has to happen here */ }
+
+		ReleaseHandle await_resume() noexcept;
 
 		CoQutex &coQutex;
+
+	private:
+		PromiseChainLink *acquirerChainLink = nullptr;
 	};
 
 	AcquireInvocationAndSuspensionPolicy getAcquireInvocationAndSuspensionPolicy() noexcept
@@ -60,26 +109,66 @@ public:
 		return AcquireInvocationAndSuspensionPolicy(*this);
 	}
 
-	void releaseCInd() noexcept
-	{
-		sscl::SpinLock::Guard guard(spinLock);
-
-		isOwned = false;
-		if (waitingCoroutines.empty())
-			{ return; }
-
-		auto &frontWaitingCoroutine = waitingCoroutines.front();
-		boost::asio::post(
-			frontWaitingCoroutine.callerIoContext,
-			frontWaitingCoroutine.callerSchedHandle);
-		waitingCoroutines.pop_front();
-	}
-
 private:
-	friend class AcquireInvocationAndSuspensionPolicy;
+	friend class ReleaseHandle;
+
+	void release() noexcept;
+
 	sscl::SpinLock spinLock;
 	bool isOwned = false;
 	std::list<AcquireInvocationAndSuspensionPolicy::WaitingCoroutine> waitingCoroutines;
 };
+
+#include "promiseChainLink.h"
+
+inline ReleaseHandle::ReleaseHandle(ReleaseHandle &&other) noexcept
+: promiseChainLink(other.promiseChainLink),
+coQutex(other.coQutex),
+armed(other.armed)
+{
+	other.armed = false;
+}
+
+inline ReleaseHandle::~ReleaseHandle() noexcept
+{
+	if (armed) {
+		release();
+	}
+}
+
+inline void ReleaseHandle::release() noexcept
+{
+	if (!armed) {
+		return;
+	}
+	promiseChainLink.removeAcquiredLock(coQutex);
+	armed = false;
+	coQutex.release();
+}
+
+inline void CoQutex::release() noexcept
+{
+	sscl::SpinLock::Guard guard(spinLock);
+
+	assert(isOwned);
+	if (waitingCoroutines.empty())
+	{
+		isOwned = false;
+		return;
+	}
+
+	auto &frontWaitingCoroutine = waitingCoroutines.front();
+	boost::asio::post(
+		frontWaitingCoroutine.callerIoContext,
+		frontWaitingCoroutine.callerSchedHandle);
+	waitingCoroutines.pop_front();
+}
+
+inline ReleaseHandle CoQutex::AcquireInvocationAndSuspensionPolicy::await_resume() noexcept
+{
+	assert(acquirerChainLink != nullptr);
+	acquirerChainLink->addAcquiredLock(coQutex);
+	return ReleaseHandle(*acquirerChainLink, coQutex);
+}
 
 #endif // CO_QUTEX_H

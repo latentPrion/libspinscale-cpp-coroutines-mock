@@ -13,6 +13,7 @@
 #include <boost/asio/post.hpp>
 
 #include "current_io_context.h"
+#include "coQutex.h"
 
 extern boost::asio::io_context bodyIoContext;
 
@@ -122,6 +123,7 @@ struct BodyPostingPromiseReturnOps<PromiseType, T, true>
 
 template <typename T>
 struct PostingPromise
+: public PromiseChainLink
 {
 	PostingPromise() noexcept
 	: returnValues()
@@ -142,6 +144,11 @@ struct PostingPromise
 	void unhandled_exception() noexcept
 	{
 		returnValues.myExceptionPtr = std::current_exception();
+	}
+
+	void removeAcquiredLock(CoQutex &coQutex) noexcept override
+	{
+		eraseFirstMatchingAcquiredLock(coQutex);
 	}
 
 	std::suspend_always final_suspend() noexcept
