@@ -10,9 +10,8 @@
 #include <boost/asio/post.hpp>
 
 #include "current_io_context.h"
+#include "promiseChainWalker.h"
 #include "spinlock.h"
-
-class PromiseChainLink;
 
 class CoQutex
 {
@@ -60,7 +59,12 @@ public:
 				"CoQutex acquire requires a promise type derived from PromiseChainLink");
 
 			acquirerChainLink = &callerSchedHandle.promise();
-			sscl::SpinLock::Guard guard(coQutex.spinLock);
+
+			walkCallerPromiseChainFrom(
+				static_cast<const PromiseChainLink &>(callerSchedHandle.promise()),
+				[](const PromiseChainLink &) noexcept {});
+
+				sscl::SpinLock::Guard guard(coQutex.spinLock);
 			if (!coQutex.isOwned) {
 				coQutex.isOwned = true;
 				return false;
@@ -109,8 +113,6 @@ private:
 	bool isOwned = false;
 	std::list<AcquireInvocationAndSuspensionPolicy::WaitingCoroutine> waitingCoroutines;
 };
-
-#include "promiseChainLink.h"
 
 class [[nodiscard("store co_await result; lock is held until ReleaseHandle is released")]]
 CoQutex::ReleaseHandle
