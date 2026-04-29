@@ -82,8 +82,9 @@ public:
 			return true;
 		}
 
+		ReleaseHandle
 		[[nodiscard("store co_await result; lock is held until ReleaseHandle is released")]]
-		ReleaseHandle await_resume() noexcept;
+		await_resume() noexcept;
 
 		CoQutex &coQutex;
 
@@ -91,7 +92,9 @@ public:
 		PromiseChainLink *acquirerChainLink = nullptr;
 	};
 
-	AcquireInvocationAndSuspensionPolicy getAcquireInvocationAndSuspensionPolicy() noexcept
+	AcquireInvocationAndSuspensionPolicy
+	// [[nodiscard("store co_await result; lock is held until ReleaseHandle is released")]]
+	getAcquireInvocationAndSuspensionPolicy() noexcept
 	{
 		return AcquireInvocationAndSuspensionPolicy(*this);
 	}
@@ -121,8 +124,8 @@ private:
 	std::list<AcquireInvocationAndSuspensionPolicy::WaitingCoroutine> waitingCoroutines;
 };
 
-class [[nodiscard("store co_await result; lock is held until ReleaseHandle is released")]]
-CoQutex::ReleaseHandle
+//[[nodiscard("store co_await result; lock is held until ReleaseHandle is released")]]
+class CoQutex::ReleaseHandle
 {
 public:
 	ReleaseHandle(PromiseChainLink &promiseChainLinkIn, CoQutex &coQutexIn) noexcept
@@ -170,8 +173,8 @@ private:
 	bool armed = true;
 };
 
-[[nodiscard("store co_await result; lock is held until ReleaseHandle is released")]]
 inline CoQutex::ReleaseHandle
+// [[nodiscard("store co_await result; lock is held until ReleaseHandle is released")]]
 CoQutex::AcquireInvocationAndSuspensionPolicy::await_resume() noexcept
 {
 	assert(acquirerChainLink != nullptr);
