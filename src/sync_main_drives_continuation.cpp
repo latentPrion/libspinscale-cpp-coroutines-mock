@@ -101,6 +101,20 @@ struct ViralSuspendingInvoker
 	}
 };
 
+CoQutex initializeCReqLock;
+
+ViralSuspendingInvoker<int> print2Ints(int arg1, int arg2)
+{
+	CoQutex print2SIntsLock;
+	std::cout << __func__ << ": " << std::this_thread::get_id() << " Executing.\n";
+	std::cout << __func__ << ": " << std::this_thread::get_id() << " arg1: " << arg1 << "\n";
+	std::cout << __func__ << ": " << std::this_thread::get_id() << " arg2: " << arg2 << "\n";
+	auto r = co_await print2SIntsLock.getAcquireInvocationAndSuspensionPolicy();
+//	auto r2 = co_await initializeCReqLock.getAcquireInvocationAndSuspensionPolicy();
+	std::cout << __func__ << ": " << std::this_thread::get_id() << " !!! print2Ints returning: " << arg1 + arg2 << "\n";
+	co_return arg1 + arg2;
+}
+
 ViralSuspendingInvoker<std::string> print2Strings(std::string arg1, std::string arg2)
 {
 	CoQutex print2StringsLock;
@@ -109,19 +123,19 @@ ViralSuspendingInvoker<std::string> print2Strings(std::string arg1, std::string 
 //	throw "KEK!";
 	std::cout << __func__ << ": " << std::this_thread::get_id() << " arg2: " << arg2 << "\n";
 	auto r = co_await print2StringsLock.getAcquireInvocationAndSuspensionPolicy();
+	co_await print2Ints(1, 2);
 	co_return arg1 + " " + arg2;
 }
 
 NonViralNonSuspendingInvoker initializeCReq(
 	std::exception_ptr &, std::function<void(CalleeCoroutineHandleDestroyer)>)
 {
-	CoQutex initializeCReqLock;
 	std::cout << __func__ << ": " << std::this_thread::get_id() << " Executing.\n";
 	// throw std::runtime_error("initializeCReq exception");
 	std::cout << __func__ << ": " << std::this_thread::get_id() << " About to co_await print2Strings.\n";
-	/*auto r2 = */co_await initializeCReqLock.getAcquireInvocationAndSuspensionPolicy();
+	auto r2 = co_await initializeCReqLock.getAcquireInvocationAndSuspensionPolicy();
 	std::string returnedString = co_await print2Strings("Hello", "World");
-	auto r3 = co_await initializeCReqLock.getAcquireInvocationAndSuspensionPolicy();
+//	auto r3 = co_await initializeCReqLock.getAcquireInvocationAndSuspensionPolicy();
 	std::cout << __func__ << ": " << std::this_thread::get_id() << " print2Strings returned: " << returnedString << "\n";
 	co_return;
 }

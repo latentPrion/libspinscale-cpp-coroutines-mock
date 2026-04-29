@@ -65,6 +65,7 @@ public:
 				static_cast<const PromiseChainLink &>(callerSchedHandle.promise()),
 				[this](const PromiseChainLink &link)
 				{
+					std::cout << __func__ << ": " << std::this_thread::get_id() << " Walking caller promise chain.\n";
 					if (link.holdsAcquiredLock(coQutex)) {
 						throw std::runtime_error("Deadlock detected: CoQutex re-acquire on caller promise chain.");
 					}
@@ -83,7 +84,7 @@ public:
 		}
 
 		ReleaseHandle
-		[[nodiscard("store co_await result; lock is held until ReleaseHandle is released")]]
+		// [[nodiscard("store co_await result; lock is held until ReleaseHandle is released")]]
 		await_resume() noexcept;
 
 		CoQutex &coQutex;
