@@ -3,7 +3,7 @@
 
 #include <cassert>
 #include <coroutine>
-#include <list>
+#include <deque>
 #include <stdexcept>
 #include <type_traits>
 
@@ -122,7 +122,7 @@ private:
 
 	sscl::SpinLock spinLock;
 	bool isOwned = false;
-	std::list<AcquireInvocationAndSuspensionPolicy::WaitingCoroutine> waitingCoroutines;
+	std::deque<AcquireInvocationAndSuspensionPolicy::WaitingCoroutine> waitingCoroutines;
 };
 
 //[[nodiscard("store co_await result; lock is held until ReleaseHandle is released")]]
