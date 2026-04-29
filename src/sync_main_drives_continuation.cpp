@@ -53,10 +53,12 @@ struct NonViralNonSuspendingInvoker
 		std::cout << __func__ << ": " << std::this_thread::get_id() << " This shouldn't be called.\n";
 		return true;
 	}
+
 	void await_suspend(std::coroutine_handle<NonViralNonSuspendingInvoker>) noexcept
 	{
 		std::cout << __func__ << ": " << std::this_thread::get_id() << " This shouldn't be called.\n";
 	}
+
 	void await_resume() const noexcept
 	{
 		std::cout << __func__ << ": " << std::this_thread::get_id() << " This shouldn't be called.\n";
@@ -85,6 +87,7 @@ struct ViralSuspendingInvoker
 		std::cout << __func__ << ": " << std::this_thread::get_id() << " Returning false.\n";
 		return false;
 	}
+
 	template <typename CallerPromise>
 	void await_suspend(std::coroutine_handle<CallerPromise> callerSchedHandle) noexcept
 	{
@@ -94,6 +97,7 @@ struct ViralSuspendingInvoker
 		std::cout << __func__ << ": " << std::this_thread::get_id() << " Setting callerSchedHandle and 'suspending'.\n";
 		this->setCallerSchedHandle(callerSchedHandle);
 	}
+
 	T await_resume() const
 	{
 		std::cout << __func__ << ": " << std::this_thread::get_id() << " Resumed on caller thread, hopefully.\n";
