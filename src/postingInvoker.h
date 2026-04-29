@@ -38,17 +38,6 @@ public:
 		calleePromise.setCallerPromiseChainLink(&callerSchedHandle.promise());
 	}
 
-	/**	EXPLANATION:
-	 * Used in the exceptional edge case where the caller obtains the
-	 * invoker and then doesn't co_await it; but instead passes it
-	 * to some other thread to be invoked. In this case, the caller
-	 * will have to set its own thread's io_context here, so that the
-	 * final_suspend call will properly post back it, instead of posting
-	 * back to the original invoker-obtainer's io_context.
-	 */
-	void setCallerIoContext(boost::asio::io_context &_callerIoContext) noexcept
-		{ calleePromise.callerIoContext = _callerIoContext; }
-
 	auto await_resume() const
 	{
 		ReturnValues<T> &returnValues = calleePromise.returnValues;
