@@ -13,32 +13,7 @@
 #include "spinlock.h"
 
 class PromiseChainLink;
-
-class CoQutex;
-
-class ReleaseHandle
-{
-public:
-	ReleaseHandle(PromiseChainLink &promiseChainLinkIn, CoQutex &coQutexIn) noexcept
-	: promiseChainLink(promiseChainLinkIn),
-	coQutex(coQutexIn)
-	{}
-
-	ReleaseHandle(const ReleaseHandle &) = delete;
-	ReleaseHandle &operator=(const ReleaseHandle &) = delete;
-
-	ReleaseHandle(ReleaseHandle &&other) noexcept;
-	ReleaseHandle &operator=(ReleaseHandle &&other) noexcept = delete;
-
-	~ReleaseHandle() noexcept;
-
-	void release() noexcept;
-
-private:
-	PromiseChainLink &promiseChainLink;
-	CoQutex &coQutex;
-	bool armed = true;
-};
+class ReleaseHandle;
 
 class CoQutex
 {
@@ -112,7 +87,22 @@ public:
 private:
 	friend class ReleaseHandle;
 
-	void release() noexcept;
+	void release() noexcept
+	{
+		sscl::SpinLock::Guard guard(spinLock);
+
+		assert(isOwned);
+		if (waitingCoroutines.empty()) {
+			isOwned = false;
+			return;
+		}
+
+		auto &frontWaitingCoroutine = waitingCoroutines.front();
+		boost::asio::post(
+			frontWaitingCoroutine.callerIoContext,
+			frontWaitingCoroutine.callerSchedHandle);
+		waitingCoroutines.pop_front();
+	}
 
 	sscl::SpinLock spinLock;
 	bool isOwned = false;
@@ -121,48 +111,48 @@ private:
 
 #include "promiseChainLink.h"
 
-inline ReleaseHandle::ReleaseHandle(ReleaseHandle &&other) noexcept
-: promiseChainLink(other.promiseChainLink),
-coQutex(other.coQutex),
-armed(other.armed)
+class ReleaseHandle
 {
-	other.armed = false;
-}
+public:
+	ReleaseHandle(PromiseChainLink &promiseChainLinkIn, CoQutex &coQutexIn) noexcept
+	: promiseChainLink(promiseChainLinkIn),
+	coQutex(coQutexIn)
+	{}
 
-inline ReleaseHandle::~ReleaseHandle() noexcept
-{
-	if (armed) {
-		release();
-	}
-}
+	ReleaseHandle(const ReleaseHandle &) = delete;
+	ReleaseHandle &operator=(const ReleaseHandle &) = delete;
 
-inline void ReleaseHandle::release() noexcept
-{
-	if (!armed) {
-		return;
-	}
-	promiseChainLink.removeAcquiredLock(coQutex);
-	armed = false;
-	coQutex.release();
-}
-
-inline void CoQutex::release() noexcept
-{
-	sscl::SpinLock::Guard guard(spinLock);
-
-	assert(isOwned);
-	if (waitingCoroutines.empty())
+	ReleaseHandle(ReleaseHandle &&other) noexcept
+	: promiseChainLink(other.promiseChainLink),
+	coQutex(other.coQutex),
+	armed(other.armed)
 	{
-		isOwned = false;
-		return;
+		other.armed = false;
 	}
 
-	auto &frontWaitingCoroutine = waitingCoroutines.front();
-	boost::asio::post(
-		frontWaitingCoroutine.callerIoContext,
-		frontWaitingCoroutine.callerSchedHandle);
-	waitingCoroutines.pop_front();
-}
+	ReleaseHandle &operator=(ReleaseHandle &&other) noexcept = delete;
+
+	~ReleaseHandle() noexcept
+	{
+		if (armed)
+			{ release(); }
+	}
+
+	void release() noexcept
+	{
+		if (!armed)
+			{ return; }
+
+		armed = false;
+		promiseChainLink.removeAcquiredLock(coQutex);
+		coQutex.release();
+	}
+
+private:
+	PromiseChainLink &promiseChainLink;
+	CoQutex &coQutex;
+	bool armed = true;
+};
 
 inline ReleaseHandle CoQutex::AcquireInvocationAndSuspensionPolicy::await_resume() noexcept
 {
