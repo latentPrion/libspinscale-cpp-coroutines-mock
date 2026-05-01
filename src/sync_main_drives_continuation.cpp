@@ -11,9 +11,8 @@
 #include <boost/asio/executor_work_guard.hpp>
 
 #include "current_io_context.h"
-#include "coQutex.h"
 #include "promises.h"
-#include "postingInvoker.h"
+#include "invokers.h"
 
 thread_local boost::asio::io_context *tls_current_io_context = nullptr;
 
@@ -24,90 +23,60 @@ boost::asio::io_context &current_io_context() {
 	return *tls_current_io_context;
 }
 
-boost::asio::io_context mainIoContext, bodyIoContext;
+boost::asio::io_context mainIoContext, bodyIoContext, worldIoContext, legIoContext;
 boost::asio::executor_work_guard<
 	boost::asio::io_context::executor_type> bodyIoContextIdleDoesNotEndRun(
-		bodyIoContext.get_executor());	
+		bodyIoContext.get_executor());
+boost::asio::executor_work_guard<
+	boost::asio::io_context::executor_type> worldIoContextIdleDoesNotEndRun(
+		worldIoContext.get_executor());
+boost::asio::executor_work_guard<
+	boost::asio::io_context::executor_type> legIoContextIdleDoesNotEndRun(
+		legIoContext.get_executor());
 
-struct NonViralNonSuspendingInvoker
-:	public PostingInvoker<BodyPostingPromise<void>, void>
+struct BodyThreadTag
 {
-	struct promise_type
-	:	public BodyPostingPromise<void>
-	{
-		using BodyPostingPromise<void>::BodyPostingPromise;
-		NonViralNonSuspendingInvoker get_return_object()
-		{
-			std::cout << __func__ << ": " << std::this_thread::get_id() << " Returning NonViralNonSuspendingInvoker.\n";
-			if (!this->callerLambda) {
-				throw std::runtime_error("Missing completion lambda: non-viral coroutine would leak frame because no destroy() owner was provided.");
-			}
-			return NonViralNonSuspendingInvoker(*this);
-		}
-	};
+	static boost::asio::io_context &io_context() noexcept
+		{ return bodyIoContext; }
+};
 
-	using PostingInvoker<BodyPostingPromise<void>, void>::PostingInvoker;
+struct WorldThreadTag
+{
+	static boost::asio::io_context &io_context() noexcept
+		{ return worldIoContext; }
+};
 
-	bool await_ready() const noexcept
-	{
-		std::cout << __func__ << ": " << std::this_thread::get_id() << " This shouldn't be called.\n";
-		return true;
-	}
-
-	void await_suspend(std::coroutine_handle<NonViralNonSuspendingInvoker>) noexcept
-	{
-		std::cout << __func__ << ": " << std::this_thread::get_id() << " This shouldn't be called.\n";
-	}
-
-	void await_resume() const noexcept
-	{
-		std::cout << __func__ << ": " << std::this_thread::get_id() << " This shouldn't be called.\n";
-	}
+struct LegThreadTag
+{
+	static boost::asio::io_context &io_context() noexcept
+		{ return legIoContext; }
 };
 
 template <typename T>
-struct ViralSuspendingInvoker
-:	public PostingInvoker<BodyPostingPromise<T>, T>
-{
-	struct promise_type
-	:	public BodyPostingPromise<T>
-	{
-		using BodyPostingPromise<T>::BodyPostingPromise;
-		ViralSuspendingInvoker<T> get_return_object() noexcept
-		{
-			std::cout << __func__ << ": " << std::this_thread::get_id() << " Returning ViralSuspendingInvoker.\n";
-			return ViralSuspendingInvoker<T>(*this);
-		}
-	};
+using BodyPostingPromise = TaggedPostingPromise<T, BodyThreadTag>;
 
-	using PostingInvoker<BodyPostingPromise<T>, T>::PostingInvoker;
+template <typename T>
+using WorldPostingPromise = TaggedPostingPromise<T, WorldThreadTag>;
 
-	bool await_ready() const noexcept
-	{
-		std::cout << __func__ << ": " << std::this_thread::get_id() << " Returning false.\n";
-		return false;
-	}
+template <typename T>
+using LegPostingPromise = TaggedPostingPromise<T, LegThreadTag>;
 
-	template <typename CallerPromise>
-	void await_suspend(std::coroutine_handle<CallerPromise> callerSchedHandle) noexcept
-	{
-		static_assert(
-			std::is_base_of_v<PromiseChainLink, CallerPromise>,
-			"ViralSuspendingInvoker caller promise must derive from PromiseChainLink");
-		std::cout << __func__ << ": " << std::this_thread::get_id() << " Setting callerSchedHandle and 'suspending'.\n";
-		this->setCallerSchedHandle(callerSchedHandle);
-	}
+using BodyNonViralNonSuspendingInvoker = NonViralNonSuspendingInvoker<BodyPostingPromise>;
+using WorldNonViralNonSuspendingInvoker = NonViralNonSuspendingInvoker<WorldPostingPromise>;
+using LegNonViralNonSuspendingInvoker = NonViralNonSuspendingInvoker<LegPostingPromise>;
 
-	T await_resume() const
-	{
-		std::cout << __func__ << ": " << std::this_thread::get_id() << " Resumed on caller thread, hopefully.\n";
-		return PostingInvoker<BodyPostingPromise<T>, T>::await_resume();
-	}
-};
+template <typename T>
+using BodyViralInvoker = ViralSuspendingInvoker<BodyPostingPromise, T>;
+
+template <typename T>
+using WorldViralInvoker = ViralSuspendingInvoker<WorldPostingPromise, T>;
+
+template <typename T>
+using LegViralInvoker = ViralSuspendingInvoker<LegPostingPromise, T>;
 
 CoQutex initializeCReqLock;
 
-ViralSuspendingInvoker<int> print2Ints(int arg1, int arg2)
+LegViralInvoker<int> print2Ints(int arg1, int arg2)
 {
 	CoQutex print2SIntsLock;
 	std::cout << __func__ << ": " << std::this_thread::get_id() << " Executing.\n";
@@ -119,7 +88,7 @@ ViralSuspendingInvoker<int> print2Ints(int arg1, int arg2)
 	co_return arg1 + arg2;
 }
 
-ViralSuspendingInvoker<std::string> print2Strings(std::string arg1, std::string arg2)
+WorldViralInvoker<std::string> print2Strings(std::string arg1, std::string arg2)
 {
 	CoQutex print2StringsLock;
 	std::cout << __func__ << ": " << std::this_thread::get_id() << " Executing.\n";
@@ -131,7 +100,7 @@ ViralSuspendingInvoker<std::string> print2Strings(std::string arg1, std::string 
 	co_return arg1 + " " + arg2;
 }
 
-NonViralNonSuspendingInvoker initializeCReq(
+BodyNonViralNonSuspendingInvoker initializeCReq(
 	std::exception_ptr &, std::function<void(CalleeCoroutineHandleDestroyer)>)
 {
 	std::cout << __func__ << ": " << std::this_thread::get_id() << " Executing.\n";
@@ -144,40 +113,65 @@ NonViralNonSuspendingInvoker initializeCReq(
 	co_return;
 }
 
+void runNamedContextThreadLoop(
+	boost::asio::io_context &context,
+	bool &keepLooping,
+	const char *contextName);
+
 void bodyThreadEntry(bool &body_keep_looping)
 {
-	tls_current_io_context = &bodyIoContext;
+	runNamedContextThreadLoop(bodyIoContext, body_keep_looping, "body");
+}
 
-	std::cout << __func__ << ": My TID is: " << std::this_thread::get_id() << ".\n";
+void runNamedContextThreadLoop(
+	boost::asio::io_context &context,
+	bool &keepLooping,
+	const char *contextName)
+{
+	tls_current_io_context = &context;
 
-	for (body_keep_looping = true; body_keep_looping;) {
+	std::cout << __func__ << " (" << contextName << "): My TID is: " << std::this_thread::get_id() << ".\n";
+
+	for (keepLooping = true; keepLooping;) {
 		bool send_exception_ind = false;
 
 		try {
-			bodyIoContext.restart();
-			bodyIoContext.run();
+			context.restart();
+			context.run();
 		} catch (const std::exception &exception) {
 			send_exception_ind = true;
-			std::cerr << "body: Exception occurred: " << exception.what() << "\n";
+			std::cerr << contextName << ": Exception occurred: " << exception.what() << "\n";
 		} catch (...) {
 			send_exception_ind = true;
-			std::cerr << "body: Unknown exception occurred\n";
+			std::cerr << contextName << ": Unknown exception occurred\n";
 		}
 
 		if (send_exception_ind) {
-			std::cerr << "body: loop exception hook stand-in\n";
+			std::cerr << contextName << ": loop exception hook stand-in\n";
 		}
 	}
 	tls_current_io_context = nullptr;
+}
+
+void worldThreadEntry(bool &world_keep_looping)
+{
+	runNamedContextThreadLoop(worldIoContext, world_keep_looping, "world");
+}
+
+void legThreadEntry(bool &leg_keep_looping)
+{
+	runNamedContextThreadLoop(legIoContext, leg_keep_looping, "leg");
 }
 
 int main() {
 	tls_current_io_context = &mainIoContext;
 	bool keep_looping = true;
 	bool body_keep_looping = true;
+	bool world_keep_looping = true;
+	bool leg_keep_looping = true;
 
 	boost::asio::signal_set shutdownSignals(mainIoContext, SIGINT, SIGTERM);
-	shutdownSignals.async_wait([&keep_looping, &body_keep_looping](
+	shutdownSignals.async_wait([&keep_looping, &body_keep_looping, &world_keep_looping, &leg_keep_looping](
 		const boost::system::error_code& errorCode, int)
 	{
 		if (errorCode) {
@@ -191,16 +185,26 @@ int main() {
 			mainIoContext.stop();
 			keep_looping = false;
 		});
+		boost::asio::post(worldIoContext, [&world_keep_looping] {
+			worldIoContext.stop();
+			world_keep_looping = false;
+		});
+		boost::asio::post(legIoContext, [&leg_keep_looping] {
+			legIoContext.stop();
+			leg_keep_looping = false;
+		});
 	});
 
 	std::thread body_thread(bodyThreadEntry, std::ref(body_keep_looping));
+	std::thread world_thread(worldThreadEntry, std::ref(world_keep_looping));
+	std::thread leg_thread(legThreadEntry, std::ref(leg_keep_looping));
 
 	std::cout << __func__ << ": My TID is: " << std::this_thread::get_id() << ".\n";
 	/* Give the body thread time to start up and wait on its io context.
 	 */
 	std::this_thread::sleep_for(std::chrono::milliseconds(500));
 	std::cout << __func__ << ": " << std::this_thread::get_id() << " About to call initializeCReq.\n";
-	/*NonViralNonSuspendingInvoker invoker =*/
+	/*BodyNonViralNonSuspendingInvoker invoker =*/
 	std::exception_ptr initializeCReqExceptionPtr = nullptr;
 	initializeCReq(
 		initializeCReqExceptionPtr,
@@ -237,6 +241,8 @@ int main() {
 
 	std::cout << __func__ << ": " << std::this_thread::get_id() << " About to join body thread.\n";
 	body_thread.join();
+	world_thread.join();
+	leg_thread.join();
 	tls_current_io_context = nullptr;
 	return EXIT_SUCCESS;
 }

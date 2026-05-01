@@ -9,4 +9,4 @@ AM_LDFLAGS = @BOOST_LDFLAGS@
 
 # awaitable_returnable_to_caller_SOURCES = awaitable-returnable-to-caller.cpp
 # get_ret_obj_must_return_awaitable_SOURCES = get_ret_obj_must_return_awaitable.cpp
-sync_main_drives_continuation_SOURCES = sync_main_drives_continuation.cpp
+sync_main_drives_continuation_SOURCES = invokers.h sync_main_drives_continuation.cpp

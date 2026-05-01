@@ -15,8 +15,6 @@
 #include "current_io_context.h"
 #include "coQutex.h"
 
-extern boost::asio::io_context bodyIoContext;
-
 template <typename PromiseType, typename T>
 class PostingInvoker;
 
@@ -100,14 +98,14 @@ struct ReturnValues
 	std::exception_ptr myMemberExceptionPtr = nullptr;
 };
 
-template <typename T>
-class BodyPostingPromise;
-
+/**	`return_value` / `return_void` only. ThreadTag is not a template parameter here:
+ *	for tagged promises, PromiseType is `TaggedPostingPromise<T, ThreadTag>`.
+ */
 template <typename PromiseType, typename T, bool IsVoid = std::is_void_v<T>>
-struct BodyPostingPromiseReturnOps;
+struct PostingPromiseReturnOps;
 
 template <typename PromiseType, typename T>
-struct BodyPostingPromiseReturnOps<PromiseType, T, false>
+struct PostingPromiseReturnOps<PromiseType, T, false>
 {
 	void return_value(T returnValue) noexcept
 	{
@@ -116,7 +114,7 @@ struct BodyPostingPromiseReturnOps<PromiseType, T, false>
 };
 
 template <typename PromiseType, typename T>
-struct BodyPostingPromiseReturnOps<PromiseType, T, true>
+struct PostingPromiseReturnOps<PromiseType, T, true>
 {
 	void return_void() noexcept
 	{
@@ -216,18 +214,18 @@ protected:
 	friend class PostingInvoker;
 };
 
-template <typename T>
-struct BodyPostingPromise
+template <typename T, typename ThreadTag>
+struct TaggedPostingPromise
 :	public PostingPromise<T>,
-	public BodyPostingPromiseReturnOps<BodyPostingPromise<T>, T>
+	public PostingPromiseReturnOps<TaggedPostingPromise<T, ThreadTag>, T>
 {
-	BodyPostingPromise() noexcept
+	TaggedPostingPromise() noexcept
 	:	PostingPromise<T>()
 	{
 		initializeSelfSchedHandle();
 	}
 
-	BodyPostingPromise(
+	TaggedPostingPromise(
 		std::exception_ptr &_exceptionPtr,
 		std::function<void(CalleeCoroutineHandleDestroyer)> _callerLambda) noexcept
 	:	PostingPromise<T>(_exceptionPtr, std::move(_callerLambda))
@@ -237,8 +235,10 @@ struct BodyPostingPromise
 
 	std::suspend_always initial_suspend() noexcept
 	{
-		std::cout << __func__ << ": " << std::this_thread::get_id() << " About to post to bodyIoContext.\n";
-		boost::asio::post(bodyIoContext, this->selfSchedHandle);
+		std::cout << __func__ << ": " << std::this_thread::get_id() << " About to post selfSchedHandle to " << typeid(ThreadTag).name() << ".\n";
+		boost::asio::post(
+			ThreadTag::io_context(),
+			this->selfSchedHandle);
 		std::cout << __func__ << ": " << std::this_thread::get_id() << " Returning suspend_always.\n";
 		return {};
 	}
@@ -247,7 +247,7 @@ private:
 	void initializeSelfSchedHandle() noexcept
 	{
 		this->setSelfSchedHandle(
-			std::coroutine_handle<BodyPostingPromise<T>>::from_promise(*this));
+			std::coroutine_handle<TaggedPostingPromise<T, ThreadTag>>::from_promise(*this));
 	}
 };
 
