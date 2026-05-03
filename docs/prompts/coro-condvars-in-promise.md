@@ -170,104 +170,33 @@ Ok. I wan tto try to do this from the initial_suspend insted of final_suspend. S
 
 The idea is:
 ```cpp
-struct WaitForInvoker
-:	public suspend_always
-{
-	await_suspend(coroutine_handle<> cvCallerSchedHandle)
-	{
-		sscl::SpinLock::Guard(spinLock);
-		if (!cv.isSignaled)
-		{
-			waitingCoroutines.emplace_back(
-				current_io_context(), cvCallerSchedHandle);
-
-			return true;
-		}
-
-		return false;
-	}
-
-	void await_resume()
-	{
-		invokeOnSignaledCb();
-	}
-
-	void invokeOnSignaledCb()
-	{
-		if (onSignaledCb) {
-			onSignaledCb();
-		}
-	}
-
-	CoConditionVariable &cv;
-	std::vector<WaitingCoroutines> waitingCoroutines;
-	std::function<> onSignaledCb;
-};
-
 struct PostingPromise
 {
+	/* Posting promise should still enforce that a callerLambda
+	 * is supplied by NonViralNonSuspendingInvokers.
+	 */
 	struct FinalSuspendPostingInvoker
-	:	public suspend_always
 	{
 		FinalSuspendPostingInvoker(
 			boost::asio::io_context &_callerIoContext,
-			PostingPromise &_calleePromise)
-		: callerIoContext(_callerIoContext),
-		calleePromise(_calleePromise)
-		{}
-
-		virtual bool await_ready()=0;
-		virtual bool await_suspend()=0;
-		virtual void await_resume()=0;
-
-		boost::asio::io_context &callerIoContext;
-		PostingPromise &calleePromise;
-	};
-
-	struct NonViralInitialSuspendPostingInvoker
-	:	public FinalSuspendPostingInvoker
-	{
-		NonViralInitialSuspendPostingInvoker(
-			boost::asio::io_context &_callerIoContext
 			PostingPromise &_calleePromise,
 			std::function<> _callerLambda)
-		:	FinalSuspendPostingInvoker(_callerIoContext, _calleePromise)
+		: callerIoContext(_callerIoContext), calleePromise(_calleePromise),
 		callerLambda(_callerLambda)
+		decisionEnablingInvoker(std::nullopt)
 		{}
 
-		bool await_ready() override { return false; }
-		bool await_suspend() override
-		{
-			boost::asio::post(
-				calleeIoContext,
-			[&calleePromise]
-			{
-				calleePromise.callerLambda(
-					CalleeCoroutineHandleDestroyer(
-						calleePromise.selfSchedHandle));
-			});
-
-			return true;
-		}
-
-		void await_resume() override {}
-
-		std::function<> callerLambda;
-	}
-
-	struct ViralInitialSuspendPostingInvoker
-	:	public FinalSuspendPostingInvoker
-	{
-		ViralInitialSuspendPostingInvoker(
+		FinalSuspendPostingInvoker(
 			boost::asio::io_context &_callerIoContext,
 			PostingPromise &_calleePromise,
 			CoConditionVariable::DecisionEnablingDerivableWaitForInvoker
 				&_decisionEnablingInvoker)
-		:	FinalSuspendPostingInvoker(_callerIoContext, _calleePromise)
-		decisionEnablingInvoker(_decisionEnablingInvoker),
+		: callerIoContext(_callerIoContext), calleePromise(_calleePromise),
+		callerLambda(nullptr),
+		decisionEnablingInvoker(_decisionEnablingInvoker)
 		{}
 
-		bool await_ready() override { return false; }
+		bool await_ready() { return false; }
 
 		/**	EXPLANATION:
 		 * DecisionEnablingDerivableWaitForInvoker intentionally
@@ -281,12 +210,26 @@ struct PostingPromise
 		 * as part of its own implementation of await_suspend.
 		 */
 		bool await_suspend(template<> coroutine_handle cvCallerSchedHandle)
-			override
 		{
-			decisionFactors = decisionEnablingInvoker.awaitSuspend(
+			if (callerLambda)
+			{
+				boost::asio::post(
+					callerIoContext,
+				[&calleePromise]
+				{
+					calleePromise.callerLambda(
+						CalleeCoroutineHandleDestroyer(
+							calleePromise.selfSchedHandle));
+				});
+	
+				return true;
+			}
+
+			assert(decisionEnablingInvoker.has_value());
+			decisionFactors = decisionEnablingInvoker.value().awaitSuspend(
 					cvCallerSchedHandle);
 
-			if (decisionFactors.isSignaled)
+			if (decisionFactors.wasAlreadySignaled)
 			{
 				boost::asio::post(
 					this->callerIoContext, promise.callerSchedHandle);
@@ -296,21 +239,23 @@ struct PostingPromise
 			return true;
 		}
 
-		void await_resume() override
+		void await_resume()
 		{
-			if (!decisionFactors.isSignaled)
+			if (!callerLambda && !decisionFactors.wasAlreadySignaled)
 			{
 				boost::asio::post(
-					this->callerIoContext, promise.selfSchedHandle);
+					this->callerIoContext, calleePromise.callerSchedHandle);
 			}
 		}
 
 		// Deliberately a copy and not a ref.
-		DecisionEnablingDerivableWaitForInvoker decisionEnablingInvoker;
+		std::function<> callerLambda;
+		std::optional<DecisionEnablingDerivableWaitForInvoker>
+			decisionEnablingInvoker;
 		DecisionEnablingDerivableWaitForInvoker::DecisionFactors
 			decisionFactors;
-		PostingPromise &promise;
-		boost::asio::io_context &calleeIoContext;
+		boost::asio::io_context &callerIoContext;
+		PostingPromise &calleePromise;
 	};
 
 	/**	EXPLANATION:
@@ -334,12 +279,12 @@ struct PostingPromise
 	{
 		if (callerLambda)
 		{
-			return NonViralInitialSuspendPostingInvoker(
+			return FinalSuspendPostingInvoker(
 				callerIoContext, *this,
 				callerLambda);
 		}
 
-		return ViralInitialSuspendPostingInvoker(
+		return FinalSuspendPostingInvoker(
 			callerIoContext, *this,
 			callerSchedHandleIsSetCv
 				.getDecisionEnablingDerivableWaitForInvoker());
@@ -403,7 +348,7 @@ class CoConditionVariable
 		struct DecisionFactors
 		{
 			sscl::SpinLock &cvInternalSpinLock;
-			bool isSignaled
+			bool wasAlreadySignaled;
 		};
 
 		using OperationInvoker::OperationInvoker;
@@ -418,14 +363,18 @@ class CoConditionVariable
 			 * and also decide on suspension policy.
 			 */
 			parentCv.spinLock.acquire();
-			if (isSignaled) {
-				return DecisionFactors{ parentCv, isSignaled };
+			if (parentCv.isSignaled) {
+				return DecisionFactors{
+					parentCv.spinLock, parentCv.isSignaled
+				};
 			}
 
 			parentCv.waitingCoroutines.emplace_back(
 				current_io_context(), cvCallerSchedHandle);
-			
-			return DecisionFactors{ parentCv, isSignaled };
+
+			return DecisionFactors{
+				parentCv.spinLock, parentCv.isSignaled
+			};
 		}
 		void awaitResume() {}
 	};

@@ -107,7 +107,9 @@ BodyNonViralNonSuspendingInvoker initializeCReq(
 	// throw std::runtime_error("initializeCReq exception");
 	std::cout << __func__ << ": " << std::this_thread::get_id() << " About to co_await print2Strings.\n";
 	auto r2 = co_await initializeCReqLock.getAcquireInvocationAndSuspensionPolicy();
-	std::string returnedString = co_await print2Strings("Hello", "World");
+	auto deferredPrint2StringsResult = print2Strings("Hello", "World");
+	std::this_thread::sleep_for(std::chrono::seconds(3));
+	std::string returnedString = co_await deferredPrint2StringsResult;
 //	auto r3 = co_await initializeCReqLock.getAcquireInvocationAndSuspensionPolicy();
 	std::cout << __func__ << ": " << std::this_thread::get_id() << " print2Strings returned: " << returnedString << "\n";
 	co_return;

@@ -5,14 +5,17 @@
 #include <exception>
 #include <functional>
 #include <iostream>
+#include <optional>
 #include <thread>
 #include <type_traits>
 #include <utility>
 
+#include <boost/asio/dispatch.hpp>
 #include <boost/asio/io_context.hpp>
 #include <boost/asio/post.hpp>
 
 #include "current_io_context.h"
+#include "coConditionVariable.h"
 #include "coQutex.h"
 
 template <typename PromiseType, typename T>
@@ -158,46 +161,119 @@ struct PostingPromise
 	PromiseChainLink *callerPromiseChainLink() noexcept override
 		{ return callerChainLink; }
 
-	std::suspend_always final_suspend() noexcept
-	{
-		if (callerSchedHandle)
-		{
-			std::cout << __func__ << ": " << std::this_thread::get_id() << " About to post-back callerSchedHandle to mainIoContext.\n";
-			boost::asio::post(callerIoContext, callerSchedHandle);
-		}
-		else if (callerLambda)
-		{
-			std::cout << __func__ << ": " << std::this_thread::get_id() << " About to post-back lambda to mainIoContext.\n";
-			boost::asio::post(callerIoContext, [this] {
-				callerLambda(CalleeCoroutineHandleDestroyer(selfSchedHandle));
-			});
-		}
-		else {
-			std::cout << __func__ << ": " << std::this_thread::get_id() << " No mechanism provided to post-back to caller. Coroutine frame will leak.\n";
-		}
-		std::cout << __func__ << ": " << std::this_thread::get_id() << " Returning suspend_always.\n";
-		return {};
-	}
-
-	/**	EXPLANATION:
-	 * This is used to temporarily store the return values from the callee,
-	 * in the case of a non-viral invoker which gives us a lambda and
-	 * an exception pointer. The lambda+excPtr are given to us in the
-	 * promise_type ctor. But this ctor runs prior to get_return_object(),
-	 * so we need to store the values here temporarily.
-	 *
-	 * Inside of get_return_object(), we assign the values to the callerInvoker,
-	 * and from then on, the callerInvoker is the authoritative single storage
-	 * location for return values to the caller.
-	 *
-	 * Doing it this way enables us to use suspend_never in final_suspend().
-	 */
 	ReturnValues<T> returnValues;
 	std::function<void(CalleeCoroutineHandleDestroyer)> callerLambda;
 	boost::asio::io_context &callerIoContext = current_io_context();
 	std::coroutine_handle<> selfSchedHandle;
 	std::coroutine_handle<void> callerSchedHandle;
 	PromiseChainLink *callerChainLink = nullptr;
+	CoConditionVariable callerSchedHandleIsSetCv;
+
+	/**	Non-viral (`callerLambda`): post completion from `await_suspend` and suspend
+	 *	like `suspend_always` so the frame survives until the lambda destroys it.
+	 *	Viral: gate on `callerSchedHandleIsSetCv` via `DecisionEnablingDerivableWaitForInvoker`
+	 *	until `PostingInvoker::setCallerSchedHandle` has run and signaled; do not read
+	 *	`callerSchedHandle` before the gate opens. Caller resume is always posted from
+	 *	`await_resume` on the viral path (including the already-signaled case, where
+	 *	`await_suspend` returns `false` so `await_resume` runs immediately).
+	 */
+	struct FinalSuspendPostingInvoker
+	{
+		explicit FinalSuspendPostingInvoker(
+			boost::asio::io_context &callerIoIn,
+			PostingPromise &calleeIn,
+			std::function<void(CalleeCoroutineHandleDestroyer)> lambdaIn) noexcept
+		: callerIoContext(callerIoIn),
+		calleePromise(calleeIn),
+		callerLambdaStorage(std::move(lambdaIn)),
+		decisionEnablingInvoker(std::nullopt)
+		{}
+
+		FinalSuspendPostingInvoker(
+			boost::asio::io_context &callerIoIn,
+			PostingPromise &calleeIn,
+			CoConditionVariable &gate) noexcept
+		: callerIoContext(callerIoIn),
+		calleePromise(calleeIn),
+		callerLambdaStorage(std::nullopt),
+		decisionEnablingInvoker(std::in_place, gate)
+		{}
+
+		bool await_ready() const noexcept
+		{
+			return false;
+		}
+
+		template <typename Promise>
+		bool await_suspend(std::coroutine_handle<Promise> h) noexcept
+		{
+			if (callerLambdaStorage) {
+				std::cout << __func__ << ": " << std::this_thread::get_id()
+					<< " Non-viral: posting callerLambda completion.\n";
+				boost::asio::post(callerIoContext, [this]() noexcept {
+					(*callerLambdaStorage)(
+						CalleeCoroutineHandleDestroyer(
+							calleePromise.selfSchedHandle));
+				});
+				return true;
+			}
+
+			auto factors = (*decisionEnablingInvoker).awaitSuspend(
+				std::coroutine_handle<void>::from_address(h.address()));
+			if (factors.wasAlreadySignaled) {
+				factors.cvInternalSpinLock.release();
+				return false;
+			}
+			factors.cvInternalSpinLock.release();
+			return true;
+		}
+
+		void await_resume() noexcept
+		{
+			if (callerLambdaStorage) {
+				return;
+			}
+			if (!decisionEnablingInvoker) {
+				return;
+			}
+			std::cout << __func__ << ": " << std::this_thread::get_id()
+				<< " Viral: dispatching callerSchedHandle resume.\n";
+			std::coroutine_handle<void> const callerHandle =
+				calleePromise.callerSchedHandle;
+			/**	`dispatch` matches prior viral thunk: when already on `callerIoContext`,
+			 *	the caller can resume (and destroy the callee) before this coroutine
+			 *	unwinds past `await_resume`; otherwise the handler is queued.
+			 */
+			if (!callerHandle) {
+				return;
+			}
+			boost::asio::dispatch(callerIoContext, [callerHandle]() mutable noexcept {
+				callerHandle.resume();
+			});
+		}
+
+	private:
+		boost::asio::io_context &callerIoContext;
+		PostingPromise &calleePromise;
+		std::optional<std::function<void(CalleeCoroutineHandleDestroyer)>>
+			callerLambdaStorage;
+		std::optional<CoConditionVariable::DecisionEnablingDerivableWaitForInvoker>
+			decisionEnablingInvoker;
+	};
+
+	FinalSuspendPostingInvoker final_suspend() noexcept
+	{
+		if (callerLambda) {
+			std::cout << __func__ << ": " << std::this_thread::get_id()
+				<< " Post-back via callerLambda (non-viral).\n";
+			return FinalSuspendPostingInvoker(
+				callerIoContext, *this, std::move(callerLambda));
+		}
+		std::cout << __func__ << ": " << std::this_thread::get_id()
+			<< " Post-back gated on callerSchedHandleIsSetCv (viral).\n";
+		return FinalSuspendPostingInvoker(
+			callerIoContext, *this, callerSchedHandleIsSetCv);
+	}
 
 protected:
 	void setSelfSchedHandle(std::coroutine_handle<> schedHandle) noexcept
@@ -221,17 +297,13 @@ struct TaggedPostingPromise
 {
 	TaggedPostingPromise() noexcept
 	:	PostingPromise<T>()
-	{
-		initializeSelfSchedHandle();
-	}
+	{}
 
 	TaggedPostingPromise(
 		std::exception_ptr &_exceptionPtr,
 		std::function<void(CalleeCoroutineHandleDestroyer)> _callerLambda) noexcept
 	:	PostingPromise<T>(_exceptionPtr, std::move(_callerLambda))
-	{
-		initializeSelfSchedHandle();
-	}
+	{}
 
 	std::suspend_always initial_suspend() noexcept
 	{
@@ -241,13 +313,6 @@ struct TaggedPostingPromise
 			this->selfSchedHandle);
 		std::cout << __func__ << ": " << std::this_thread::get_id() << " Returning suspend_always.\n";
 		return {};
-	}
-
-private:
-	void initializeSelfSchedHandle() noexcept
-	{
-		this->setSelfSchedHandle(
-			std::coroutine_handle<TaggedPostingPromise<T, ThreadTag>>::from_promise(*this));
 	}
 };
 

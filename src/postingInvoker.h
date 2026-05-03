@@ -14,15 +14,22 @@ class PostingInvoker
 {
 public:
 	explicit PostingInvoker(PromiseType &_calleePromise) noexcept
-	: calleePromise(_calleePromise)
+	: calleePromise(_calleePromise),
+	/**	Viral posting: the coroutine runtime destroys the callee frame after
+	 *	`FinalSuspendPostingInvoker::await_resume` returns; only non-viral paths
+	 *	use `CalleeCoroutineHandleDestroyer` from here.
+	 */
+	explicitDestroyCalleeFrame(static_cast<bool>(_calleePromise.callerLambda))
 	{}
 
 	~PostingInvoker() noexcept = default;
 
 	void setCallerSchedHandle(std::coroutine_handle<void> _callerSchedHandle) noexcept
 	{
-		calleePromise.callerSchedHandle = _callerSchedHandle;
-		calleePromise.setCallerPromiseChainLink(nullptr);
+		calleePromise.callerSchedHandleIsSetCv.lockedPublishThenSignal([&]() noexcept {
+			calleePromise.callerSchedHandle = _callerSchedHandle;
+			calleePromise.setCallerPromiseChainLink(nullptr);
+		});
 	}
 
 	template <typename CallerPromise>
@@ -32,30 +39,40 @@ public:
 			std::is_base_of_v<PromiseChainLink, CallerPromise>,
 			"PostingInvoker caller promise must derive from PromiseChainLink");
 
-		calleePromise.callerSchedHandle =
-			std::coroutine_handle<void>::from_address(callerSchedHandle.address());
-
-		calleePromise.setCallerPromiseChainLink(&callerSchedHandle.promise());
+		calleePromise.callerSchedHandleIsSetCv.lockedPublishThenSignal([&]() noexcept {
+			calleePromise.callerSchedHandle =
+				std::coroutine_handle<void>::from_address(callerSchedHandle.address());
+			calleePromise.setCallerPromiseChainLink(&callerSchedHandle.promise());
+		});
 	}
 
 	auto await_resume() const
 	{
 		ReturnValues<T> &returnValues = calleePromise.returnValues;
-		CalleeCoroutineHandleDestroyer completion(calleePromise.selfSchedHandle);
 		std::cout << __func__ << ": " << std::this_thread::get_id() << " About to check for and rethrow any exception.\n";
 		if (returnValues.myExceptionPtr) {
-			std::rethrow_exception(returnValues.myExceptionPtr);
+			std::exception_ptr const captured = returnValues.myExceptionPtr;
+			if (explicitDestroyCalleeFrame) {
+				CalleeCoroutineHandleDestroyer completion(calleePromise.selfSchedHandle);
+				std::rethrow_exception(captured);
+			}
+			std::rethrow_exception(captured);
 		}
-		else if constexpr (!std::is_void_v<T>) {
-			return std::move(returnValues.myReturnValue);
+		if constexpr (!std::is_void_v<T>) {
+			T result = std::move(returnValues.myReturnValue);
+			if (explicitDestroyCalleeFrame) {
+				CalleeCoroutineHandleDestroyer completion(calleePromise.selfSchedHandle);
+			}
+			return result;
 		}
-		else {
-			return;
+		if (explicitDestroyCalleeFrame) {
+			CalleeCoroutineHandleDestroyer completion(calleePromise.selfSchedHandle);
 		}
 	}
 
 private:
 	PromiseType &calleePromise;
+	bool explicitDestroyCalleeFrame;
 };
 
 #endif // POSTING_INVOKER_H
