@@ -206,72 +206,253 @@ struct WaitForInvoker
 
 struct PostingPromise
 {
-	struct InitialSuspendPostingInvoker
+	struct FinalSuspendPostingInvoker
 	:	public suspend_always
 	{
-		InitialSuspendPostingInvoker(
-			boost::asio::io_context &_calleeIoContext,
-			template<> coroutine_handle _calleeSchedHandle)
+		FinalSuspendPostingInvoker(
+			boost::asio::io_context &_callerIoContext,
+			PostingPromise &_calleePromise)
+		: callerIoContext(_callerIoContext),
+		calleePromise(_calleePromise)
 		{}
 
-		boost::asio::io_context &calleeIoContext;
-		template<> coroutine_handle calleeSchedHandle;
+		virtual bool await_ready()=0;
+		virtual bool await_suspend()=0;
+		virtual void await_resume()=0;
+
+		boost::asio::io_context &callerIoContext;
+		PostingPromise &calleePromise;
 	};
 
 	struct NonViralInitialSuspendPostingInvoker
-	:	public InitialSuspendPostingInvoker
+	:	public FinalSuspendPostingInvoker
 	{
-		using InitialSuspendPostingInvoker::InitialSuspendPostingInvoker;
-
-		bool await_ready()
-		{
-			boost::asio::post(calleeIoContext, calleeSchedHandle);
-			return false;
-		}
-	}
-
-	/*
-	struct ViralInitialSuspendPostingInvoker()
-	:	public InitialSuspendPostingInvoker
-	{
-		ViralInitialSuspendPostingInvoker(
-			CoConditionVariable &_callerSchedHandleIsSetCv,
-			boost::asio::io_context &_calleeIoContext,
-			template<> coroutine_handle _calleeSchedHandle)
-		:	InitialSuspendPostingInvoker(_calleeIoContext, _calleeSchedHandle),
-		callerSchedHandleIsSetCv(_callerSchedHandleIsSeCv)
+		NonViralInitialSuspendPostingInvoker(
+			boost::asio::io_context &_callerIoContext
+			PostingPromise &_calleePromise,
+			std::function<> _callerLambda)
+		:	FinalSuspendPostingInvoker(_callerIoContext, _calleePromise)
+		callerLambda(_callerLambda)
 		{}
 
-		await_suspend()
+		bool await_ready() override { return false; }
+		bool await_suspend() override
 		{
-			return callerSchedHandleIsSetCb.getWaitForInvoker();
+			boost::asio::post(
+				calleeIoContext,
+			[&calleePromise]
+			{
+				calleePromise.callerLambda(
+					CalleeCoroutineHandleDestroyer(
+						calleePromise.selfSchedHandle));
+			});
+
+			return true;
 		}
 
-		CoConditionVariable &callerSchedHandleIsSetCv;
-	};
-	*/
+		void await_resume() override {}
 
+		std::function<> callerLambda;
+	}
+
+	struct ViralInitialSuspendPostingInvoker
+	:	public FinalSuspendPostingInvoker
+	{
+		ViralInitialSuspendPostingInvoker(
+			boost::asio::io_context &_callerIoContext,
+			PostingPromise &_calleePromise,
+			CoConditionVariable::DecisionEnablingDerivableWaitForInvoker
+				&_decisionEnablingInvoker)
+		:	FinalSuspendPostingInvoker(_callerIoContext, _calleePromise)
+		decisionEnablingInvoker(_decisionEnablingInvoker),
+		{}
+
+		bool await_ready() override { return false; }
+
+		/**	EXPLANATION:
+		 * DecisionEnablingDerivableWaitForInvoker intentionally
+		 * doesn't implement await_suspend -- instead it exposes a
+		 * method `awaitSuspend` which is intended to be called by its
+		 * derived classes, or by classes which hold an instance of
+		 * that invoker.
+		 *
+		 * So this class calls upon
+		 * DecisionEnablingDerivableWaitForInvoker::awaitSuspend,
+		 * as part of its own implementation of await_suspend.
+		 */
+		bool await_suspend(template<> coroutine_handle cvCallerSchedHandle)
+			override
+		{
+			decisionFactors = decisionEnablingInvoker.awaitSuspend(
+					cvCallerSchedHandle);
+
+			if (decisionFactors.isSignaled)
+			{
+				boost::asio::post(
+					this->callerIoContext, promise.callerSchedHandle);
+			}
+
+			decisionFactors.cvInternalSpinLock.release();
+			return true;
+		}
+
+		void await_resume() override
+		{
+			if (!decisionFactors.isSignaled)
+			{
+				boost::asio::post(
+					this->callerIoContext, promise.selfSchedHandle);
+			}
+		}
+
+		// Deliberately a copy and not a ref.
+		DecisionEnablingDerivableWaitForInvoker decisionEnablingInvoker;
+		DecisionEnablingDerivableWaitForInvoker::DecisionFactors
+			decisionFactors;
+		PostingPromise &promise;
+		boost::asio::io_context &calleeIoContext;
+	};
+
+	/**	EXPLANATION:
+	 * initial_suspend always posts to the callee, unconditionally.
+	 * The logic to wait for the caller's callerSchedHandleIsSet
+	 * condvar will be deferred until final_suspend. This gives the
+	 * caller ample time to set its schedHandle on the callee's promise.
+	 *
+	 * In theory this should enable us to avoid the overhead of the
+	 * extra condvar suspend+post() for most cases.
+	 *
+	 * In the real code this would be in the TaggedPostingPromise so
+	 * that it'll have access to ThreadTag::io_context.
+	 */
 	suspend_always initial_suspend()
 	{
-		boost::asio::io_context &currIoContext = current_io_context();
+		boost::asio::post(ThreadTag::io_context(), calleeSchedHandle);
+	}
 
+	FinalSuspendPostingInvoker final_suspend()
+	{
 		if (callerLambda)
 		{
 			return NonViralInitialSuspendPostingInvoker(
-				currIoContext, selfSchedHandle);
+				callerIoContext, *this,
+				callerLambda);
 		}
 
-		onSignaledCb = [&calleeIoContext = ThreadTag::io_context(), selfSchedHandle]
+		return ViralInitialSuspendPostingInvoker(
+			callerIoContext, *this,
+			callerSchedHandleIsSetCv
+				.getDecisionEnablingDerivableWaitForInvoker());
+	}
+};
+
+class CoConditionVariable
+{
+	struct OperationInvoker
+	{
+		OperationInvoker(CoConditionVariable &_cv)
+		: parentCv(_cv)
+		{}
+
+		CoConditionVariable &parentCv;
+	};
+
+	struct WaitForInvoker
+	:	public OperationInvoker
+	{
+		using OperationInvoker::OperationInvoker;
+
+		bool await_ready() { return false; }
+
+		bool await_suspend(
+			template<> coroutine_handle cvCallerSchedHandle)
 		{
-			boost::asio::post(calleeIoContext, selfSchedHandle)
+			sscl::SpinLock::Guard(parentCv.spinLock);
+			if (parentCv.isSignaled) {
+				return false;
+			}
+
+			parentCv.waitingCoroutines.emplace_back(
+				current_io_context(), cvCallerSchedHandle);
+
+			return true;
+		}
+
+		void await_resume() {}
+	};
+
+	WaitForInvoker getWaitForInvoker()
+		{ return WaitForInvoker(*this); }
+
+	/**	EXPLANATION:
+	 * This class' co_await hooks are intentionally named wrongly
+	 * so that co_await will not work on this class. This class is
+	 * not intended to be co_awaited directly. It is intended to be
+	 * serve as a base class for some other, derived invoker class.
+	 * The derived invoker can then call upon this class' co_await
+	 * machinery in order to make higher level decicions around
+	 * locking and coro suspension.
+	 *
+	 * We actually want to ensure that calling co_await on a
+	 * DecisionEnablingDerivableWaitForInvoker will result in a
+	 * compiler error.
+	 */
+	struct DecisionEnablingDerivableWaitForInvoker
+	:	public OperationInvoker
+	{
+		struct DecisionFactors
+		{
+			sscl::SpinLock &cvInternalSpinLock;
+			bool isSignaled
 		};
 
-		return callerSchedHandleIsSetCv.getWaitForInvoker(onSignaledCb);
+		using OperationInvoker::OperationInvoker;
+
+		awaitReady() { return false; }
+
+		DecisionFactors awaitSuspend(
+			template<> coroutine_handle cvCallerSchedHandle)
+		{
+			/**	CAVEAT:
+			 * The derived caller must explicitly release the spinlock
+			 * and also decide on suspension policy.
+			 */
+			parentCv.spinLock.acquire();
+			if (isSignaled) {
+				return DecisionFactors{ parentCv, isSignaled };
+			}
+
+			parentCv.waitingCoroutines.emplace_back(
+				current_io_context(), cvCallerSchedHandle);
+			
+			return DecisionFactors{ parentCv, isSignaled };
+		}
+		void awaitResume() {}
+	};
+
+	/* Derived caller must explicitly release the spinlock,
+	 * and also decide on suspension policy.
+	 */
+	getDecisionEnablingDerivableWaitForInvoker()
+		{ return DecisionEnablingDerivableWaitForInvoker(*this); }
+
+	signal()
+	{
+		{
+			sscl::SpinLock::Guard(spinLock);
+			cvWaiters = CLONE_COLLECTION(waitingCoroutines);
+			isSignaled = true;
+		}
+
+		for (cvw: cvWaiter) {
+			boost::asio::post(cvw.ioContext, cvw.schedHandle);
+		}
 	}
 
-	final_suspend()
+	clear()
 	{
-
+		sscl::SpinLock::Guard(spinLock);
+		isSignaled = false;
 	}
 };
 ```
