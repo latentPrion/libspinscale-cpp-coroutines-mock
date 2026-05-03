@@ -14,22 +14,17 @@ class PostingInvoker
 {
 public:
 	explicit PostingInvoker(PromiseType &_calleePromise) noexcept
-	: calleePromise(_calleePromise),
-	/**	Viral posting: the coroutine runtime destroys the callee frame after
-	 *	`FinalSuspendPostingInvoker::await_resume` returns; only non-viral paths
-	 *	use `CalleeCoroutineHandleDestroyer` from here.
-	 */
-	explicitDestroyCalleeFrame(static_cast<bool>(_calleePromise.callerLambda))
+	: calleePromise(_calleePromise)
 	{}
 
 	~PostingInvoker() noexcept = default;
 
 	void setCallerSchedHandle(std::coroutine_handle<void> _callerSchedHandle) noexcept
 	{
-		calleePromise.callerSchedHandleIsSetCv.lockedPublishThenSignal([&]() noexcept {
-			calleePromise.callerSchedHandle = _callerSchedHandle;
-			calleePromise.setCallerPromiseChainLink(nullptr);
-		});
+		assert(false && "setCallerSchedHandle(std::coroutine_handle<void>) should never be called (I think).");
+		calleePromise.callerSchedHandle = std::noop_coroutine;
+		calleePromise.setCallerPromiseChainLink(nullptr);
+		calleePromise.callerSchedHandleIsSetCv.signal();
 	}
 
 	template <typename CallerPromise>
@@ -39,40 +34,36 @@ public:
 			std::is_base_of_v<PromiseChainLink, CallerPromise>,
 			"PostingInvoker caller promise must derive from PromiseChainLink");
 
-		calleePromise.callerSchedHandleIsSetCv.lockedPublishThenSignal([&]() noexcept {
-			calleePromise.callerSchedHandle =
-				std::coroutine_handle<void>::from_address(callerSchedHandle.address());
-			calleePromise.setCallerPromiseChainLink(&callerSchedHandle.promise());
-		});
+		calleePromise.callerSchedHandle = callerSchedHandle;
+		calleePromise.setCallerPromiseChainLink(&callerSchedHandle.promise());
+		std::cout << __func__ << ": " << std::this_thread::get_id()
+			<< " Done setting callerSchedHandle. Signaling condvar.\n";
+		calleePromise.callerSchedHandleIsSetCv.signal();
+		std::cout << __func__ << ": " << std::this_thread::get_id()
+			<< " Done signaling condvar.\n";
 	}
 
 	auto await_resume() const
 	{
 		ReturnValues<T> &returnValues = calleePromise.returnValues;
-		std::cout << __func__ << ": " << std::this_thread::get_id() << " About to check for and rethrow any exception.\n";
-		if (returnValues.myExceptionPtr) {
+		CalleeCoroutineHandleDestroyer completion(
+			calleePromise.selfSchedHandle);
+		std::cout << __func__ << ": " << std::this_thread::get_id()
+			<< " About to check for and rethrow any exception.\n";
+
+		if (returnValues.myExceptionPtr)
+		{
 			std::exception_ptr const captured = returnValues.myExceptionPtr;
-			if (explicitDestroyCalleeFrame) {
-				CalleeCoroutineHandleDestroyer completion(calleePromise.selfSchedHandle);
-				std::rethrow_exception(captured);
-			}
 			std::rethrow_exception(captured);
 		}
 		if constexpr (!std::is_void_v<T>) {
 			T result = std::move(returnValues.myReturnValue);
-			if (explicitDestroyCalleeFrame) {
-				CalleeCoroutineHandleDestroyer completion(calleePromise.selfSchedHandle);
-			}
 			return result;
-		}
-		if (explicitDestroyCalleeFrame) {
-			CalleeCoroutineHandleDestroyer completion(calleePromise.selfSchedHandle);
 		}
 	}
 
 private:
 	PromiseType &calleePromise;
-	bool explicitDestroyCalleeFrame;
 };
 
 #endif // POSTING_INVOKER_H

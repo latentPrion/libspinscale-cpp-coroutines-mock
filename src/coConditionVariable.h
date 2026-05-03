@@ -51,9 +51,7 @@ public:
 		template <typename Promise>
 		bool await_suspend(std::coroutine_handle<Promise> cvCallerSchedHandle) noexcept
 		{
-			std::coroutine_handle<void> const voidHandle =
-				std::coroutine_handle<void>::from_address(cvCallerSchedHandle.address());
-			boost::asio::io_context &waiterIo = current_io_context();
+			boost::asio::io_context &cvCallerIoContext = current_io_context();
 
 			sscl::SpinLock::Guard guard(parentCv.spinLock);
 			if (parentCv.isSignaled) {
@@ -61,14 +59,14 @@ public:
 			}
 
 			std::cout << __func__ << ": " << std::this_thread::get_id()
-				<< " CV un-signaled: Enqueuing waiter coroutine.\n";
+				<< " CV not signaled: Enqueuing waiter coroutine.\n";
 			parentCv.waitingCoroutines.emplace_back(WaitingCoroutine{
-				voidHandle, waiterIo});
+				cvCallerSchedHandle, cvCallerIoContext});
+
 			return true;
 		}
 
-		void await_resume() const noexcept
-		{}
+		void await_resume() const noexcept {}
 	};
 
 	/**	Manual await-style API only (lowerCamelCase); not a coroutine awaiter.
@@ -81,40 +79,41 @@ public:
 		{
 			sscl::SpinLock &cvInternalSpinLock;
 			bool wasAlreadySignaled;
+
+			DecisionFactors(sscl::SpinLock &cvLockIn, bool signaledIn) noexcept
+			: cvInternalSpinLock(cvLockIn),
+			  wasAlreadySignaled(signaledIn)
+			{}
 		};
 
 		using OperationInvoker::OperationInvoker;
 
 		void operator co_await() const = delete;
 
-		bool awaitReady() const noexcept
-		{
-			return false;
-		}
+		bool awaitReady() const noexcept { return false; }
 
 		template <typename Promise>
 		DecisionFactors awaitSuspend(std::coroutine_handle<Promise> cvCallerSchedHandle) noexcept
 		{
-			std::coroutine_handle<void> const voidHandle =
-				std::coroutine_handle<void>::from_address(cvCallerSchedHandle.address());
-			boost::asio::io_context &waiterIo = current_io_context();
+			boost::asio::io_context &cvCallerIoContext = current_io_context();
 
 			parentCv.spinLock.acquire();
-			if (parentCv.isSignaled) {
+			if (parentCv.isSignaled)
+			{
 				std::cout << __func__ << ": " << std::this_thread::get_id()
-					<< " CV signaled: wasAlreadySignaled path.\n";
-				return DecisionFactors{parentCv.spinLock, true};
+					<< " CV already signaled: returning already-signaled DecisionFactors.\n";
+				return DecisionFactors(parentCv.spinLock, true);
 			}
 
 			std::cout << __func__ << ": " << std::this_thread::get_id()
-				<< " CV un-signaled: Enqueuing waiter coroutine.\n";
+				<< " CV not signaled: returning not-signaled DecisionFactors.\n";
 			parentCv.waitingCoroutines.emplace_back(WaitingCoroutine{
-				voidHandle, waiterIo});
-			return DecisionFactors{parentCv.spinLock, false};
+				cvCallerSchedHandle, cvCallerIoContext});
+
+			return DecisionFactors(parentCv.spinLock, false);
 		}
 
-		void awaitResume() const noexcept
-		{}
+		void awaitResume() const noexcept {}
 	};
 
 	CoConditionVariable() noexcept = default;
@@ -133,36 +132,21 @@ public:
 		return DecisionEnablingDerivableWaitForInvoker(*this);
 	}
 
-	/**	Run `fn` under the internal spinlock, then set `isSignaled` and drain waiters.
-	 *	Use from `PostingInvoker::setCallerSchedHandle` so `callerSchedHandle` is published
-	 *	before any waiter woken by this signal observes `isSignaled`.
-	 */
-	template <typename Fn>
-	void lockedPublishThenSignal(Fn &&fn) noexcept
+	void signal() noexcept
 	{
 		std::deque<WaitingCoroutine> drained;
 
 		{
 			sscl::SpinLock::Guard guard(spinLock);
-			fn();
 			isSignaled = true;
 			drained.swap(waitingCoroutines);
 		}
 
 		for (WaitingCoroutine &entry : drained)
 		{
-			if (entry.callerSchedHandle)
-			{
-				boost::asio::post(
-					entry.callerIoContext,
-					entry.callerSchedHandle);
-			}
+			boost::asio::post(
+				entry.callerIoContext, entry.callerSchedHandle);
 		}
-	}
-
-	void signal() noexcept
-	{
-		lockedPublishThenSignal([]() noexcept {});
 	}
 
 	/**	Only clears the signaled flag; waiters (if any) remain in the deque. */

@@ -27,8 +27,10 @@ struct NonViralNonSuspendingInvoker
 			if (!this->callerLambda) {
 				throw std::runtime_error("Missing completion lambda: non-viral coroutine would leak frame because no destroy() owner was provided.");
 			}
+
 			this->setSelfSchedHandle(
 				std::coroutine_handle<promise_type>::from_promise(*this));
+
 			return NonViralNonSuspendingInvoker<PostingPromiseTemplate>(*this);
 		}
 	};
@@ -69,6 +71,7 @@ struct ViralSuspendingInvoker
 			std::cout << __func__ << ": " << std::this_thread::get_id() << " Returning ViralSuspendingInvoker.\n";
 			this->setSelfSchedHandle(
 				std::coroutine_handle<promise_type>::from_promise(*this));
+
 			return ViralSuspendingInvoker<PostingPromiseTemplate, T>(*this);
 		}
 	};
@@ -89,6 +92,7 @@ struct ViralSuspendingInvoker
 			"ViralSuspendingInvoker caller promise must derive from PromiseChainLink");
 		std::cout << __func__ << ": " << std::this_thread::get_id() << " Setting callerSchedHandle and 'suspending'.\n";
 		this->setCallerSchedHandle(callerSchedHandle);
+		std::cout << __func__ << ": " << std::this_thread::get_id() << " Done setting callerSchedHandle. 'Suspending' now.\n";
 	}
 
 	T await_resume() const

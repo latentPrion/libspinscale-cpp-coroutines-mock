@@ -10,7 +10,6 @@
 #include <type_traits>
 #include <utility>
 
-#include <boost/asio/dispatch.hpp>
 #include <boost/asio/io_context.hpp>
 #include <boost/asio/post.hpp>
 
@@ -170,19 +169,26 @@ struct PostingPromise
 	CoConditionVariable callerSchedHandleIsSetCv;
 
 	/**	Non-viral (`callerLambda`): post completion from `await_suspend` and suspend
-	 *	like `suspend_always` so the frame survives until the lambda destroys it.
-	 *	Viral: gate on `callerSchedHandleIsSetCv` via `DecisionEnablingDerivableWaitForInvoker`
-	 *	until `PostingInvoker::setCallerSchedHandle` has run and signaled; do not read
-	 *	`callerSchedHandle` before the gate opens. Caller resume is always posted from
-	 *	`await_resume` on the viral path (including the already-signaled case, where
-	 *	`await_suspend` returns `false` so `await_resume` runs immediately).
+	 * like `suspend_always` so the frame survives until the lambda destroys it.
+	 *
+	 * Viral: suspend on `callerSchedHandleIsSetCv` using `DecisionEnablingDerivableWaitForInvoker`
+	 * until `PostingInvoker::setCallerSchedHandle` has stored the handle and called
+	 * `callerSchedHandleIsSetCv.signal()`. Do not read `callerSchedHandle` until the
+	 * condvar is signaled. Always **`return true`** from `await_suspend` so the callee
+	 * stays suspended at `final_suspend` until the original caller runs
+	 * `CalleeCoroutineHandleDestroyer`.
+	 * If the condvar was already signaled, post the caller resume from
+	 * `await_suspend`.
+	 * If the callee was enqueued and woken by `signal()`, post from
+	 * `await_resume` (see sketch in `docs/prompts/coro-condvars-in-promise.md`).
 	 */
 	struct FinalSuspendPostingInvoker
 	{
 		explicit FinalSuspendPostingInvoker(
 			boost::asio::io_context &callerIoIn,
 			PostingPromise &calleeIn,
-			std::function<void(CalleeCoroutineHandleDestroyer)> lambdaIn) noexcept
+			std::function<void(CalleeCoroutineHandleDestroyer)> lambdaIn)
+			noexcept
 		: callerIoContext(callerIoIn),
 		calleePromise(calleeIn),
 		callerLambdaStorage(std::move(lambdaIn)),
@@ -192,11 +198,13 @@ struct PostingPromise
 		FinalSuspendPostingInvoker(
 			boost::asio::io_context &callerIoIn,
 			PostingPromise &calleeIn,
-			CoConditionVariable &gate) noexcept
+			CoConditionVariable::DecisionEnablingDerivableWaitForInvoker
+				decisionInvokerIn)
+			noexcept
 		: callerIoContext(callerIoIn),
 		calleePromise(calleeIn),
 		callerLambdaStorage(std::nullopt),
-		decisionEnablingInvoker(std::in_place, gate)
+		decisionEnablingInvoker(std::in_place, std::move(decisionInvokerIn))
 		{}
 
 		bool await_ready() const noexcept
@@ -207,7 +215,8 @@ struct PostingPromise
 		template <typename Promise>
 		bool await_suspend(std::coroutine_handle<Promise> h) noexcept
 		{
-			if (callerLambdaStorage) {
+			if (callerLambdaStorage)
+			{
 				std::cout << __func__ << ": " << std::this_thread::get_id()
 					<< " Non-viral: posting callerLambda completion.\n";
 				boost::asio::post(callerIoContext, [this]() noexcept {
@@ -218,38 +227,46 @@ struct PostingPromise
 				return true;
 			}
 
-			auto factors = (*decisionEnablingInvoker).awaitSuspend(
-				std::coroutine_handle<void>::from_address(h.address()));
-			if (factors.wasAlreadySignaled) {
-				factors.cvInternalSpinLock.release();
-				return false;
+			decisionFactors.emplace((*decisionEnablingInvoker).awaitSuspend(h));
+			if (decisionFactors->wasAlreadySignaled)
+			{
+				decisionFactors->cvInternalSpinLock.release();
+				std::cout << __func__ << ": " << std::this_thread::get_id()
+					<< " Viral: condvar was already signaled: post-back-ing callerSchedHandle resume to caller io_context.\n";
+				boost::asio::post(
+					callerIoContext,
+					calleePromise.callerSchedHandle);
 			}
-			factors.cvInternalSpinLock.release();
+			else
+			{
+				// Basically a no-op
+				std::cout << __func__ << ": " << std::this_thread::get_id()
+					<< " Viral: condvar was not signaled: Deferring post-back until condvar is signaled.\n";
+				decisionFactors->cvInternalSpinLock.release();
+			}
+
 			return true;
 		}
 
 		void await_resume() noexcept
 		{
-			if (callerLambdaStorage) {
+			if (callerLambdaStorage
+				|| (decisionFactors
+				&& decisionFactors->wasAlreadySignaled))
+			{
 				return;
 			}
-			if (!decisionEnablingInvoker) {
-				return;
-			}
+
 			std::cout << __func__ << ": " << std::this_thread::get_id()
-				<< " Viral: dispatching callerSchedHandle resume.\n";
-			std::coroutine_handle<void> const callerHandle =
-				calleePromise.callerSchedHandle;
-			/**	`dispatch` matches prior viral thunk: when already on `callerIoContext`,
-			 *	the caller can resume (and destroy the callee) before this coroutine
-			 *	unwinds past `await_resume`; otherwise the handler is queued.
+				<< " Viral: condvar was not signaled: posting callerSchedHandle resume to caller io_context.\n";
+			/**	`post` (not `dispatch`): `await_resume` runs on the callee executor after
+			 *	`signal()` posted this coroutine there, so we always queue the caller
+			 *	resume onto `callerIoContext` instead of risking inline execution when the
+			 *	two contexts coincide.
 			 */
-			if (!callerHandle) {
-				return;
-			}
-			boost::asio::dispatch(callerIoContext, [callerHandle]() mutable noexcept {
-				callerHandle.resume();
-			});
+			boost::asio::post(
+				callerIoContext,
+				calleePromise.callerSchedHandle);
 		}
 
 	private:
@@ -259,20 +276,32 @@ struct PostingPromise
 			callerLambdaStorage;
 		std::optional<CoConditionVariable::DecisionEnablingDerivableWaitForInvoker>
 			decisionEnablingInvoker;
+		/**	Viral path only: `emplace`d in `await_suspend` after the `callerLambdaStorage`
+		 *	branch. `await_resume` runs that branch only when `callerLambdaStorage` is
+		 *	empty, so `decisionFactors` is always set there; it reads `wasAlreadySignaled`
+		 *	like the sketch.
+		 */
+		std::optional<
+			CoConditionVariable::DecisionEnablingDerivableWaitForInvoker::DecisionFactors>
+			decisionFactors;
 	};
 
 	FinalSuspendPostingInvoker final_suspend() noexcept
 	{
-		if (callerLambda) {
+		if (callerLambda)
+		{
 			std::cout << __func__ << ": " << std::this_thread::get_id()
-				<< " Post-back via callerLambda (non-viral).\n";
+				<< " Non-viral: returning lambda-invoking FinalSuspendPostingInvoker.\n";
 			return FinalSuspendPostingInvoker(
 				callerIoContext, *this, std::move(callerLambda));
 		}
+
 		std::cout << __func__ << ": " << std::this_thread::get_id()
-			<< " Post-back gated on callerSchedHandleIsSetCv (viral).\n";
+			<< " Viral: returning condvar-checking FinalSuspendPostingInvoker.\n";
 		return FinalSuspendPostingInvoker(
-			callerIoContext, *this, callerSchedHandleIsSetCv);
+			callerIoContext, *this,
+			callerSchedHandleIsSetCv
+				.getDecisionEnablingDerivableWaitForInvoker());
 	}
 
 protected:
