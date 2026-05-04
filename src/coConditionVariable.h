@@ -14,15 +14,11 @@
 #include "spinlock.h"
 
 /**	Coroutine-friendly handoff: wait until `signal()` before running a completion
- *	step (used from `final_suspend` so `PostingPromise::callerSchedHandle` is not
- *	read until the viral invoker has run `setCallerSchedHandle`).
+ *	step. Standalone primitive (posting promises use `PostBackStatus` instead).
  *
  *	`clear()` only clears `isSignaled`; it does not wake or drain waiters. If
  *	`clear()` runs while coroutines are still waiting, they stay queued until a
  *	later `signal()` posts them.
- *
- *	High-level completion for posting promises lives in `PostingPromise::FinalSuspendPostingInvoker`,
- *	not in callbacks on this type.
  */
 class CoConditionVariable
 {
@@ -173,7 +169,6 @@ public:
 			sscl::SpinLock::Guard guard(spinLock);
 			isSignaled = true;
 			drained.swap(waitingCoroutines);
-//			isSignaled = false;
 		}
 
 		for (std::unique_ptr<WaitingCoroutineBase> &waiter : drained) {

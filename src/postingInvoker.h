@@ -19,16 +19,8 @@ public:
 
 	~PostingInvoker() noexcept = default;
 
-	void setCallerSchedHandle(std::coroutine_handle<void> _callerSchedHandle) noexcept
-	{
-		assert(false && "setCallerSchedHandle(std::coroutine_handle<void>) should never be called (I think).");
-		calleePromise.callerSchedHandle = std::noop_coroutine;
-		calleePromise.setCallerPromiseChainLink(nullptr);
-		calleePromise.callerSchedHandleIsSetCv.signal();
-	}
-
 	template <typename CallerPromise>
-	void setCallerSchedHandle(std::coroutine_handle<CallerPromise> callerSchedHandle) noexcept
+	bool setCallerSchedHandle(std::coroutine_handle<CallerPromise> callerSchedHandle) noexcept
 	{
 		static_assert(
 			std::is_base_of_v<PromiseChainLink, CallerPromise>,
@@ -37,14 +29,14 @@ public:
 		calleePromise.callerSchedHandle = callerSchedHandle;
 		calleePromise.setCallerPromiseChainLink(&callerSchedHandle.promise());
 		std::cout << __func__ << ": " << std::this_thread::get_id()
-			<< " Done setting callerSchedHandle. Signaling condvar.\n";
-		calleePromise.callerSchedHandleIsSetCv.signal();
-		std::cout << __func__ << ": " << std::this_thread::get_id()
-			<< " Done signaling condvar.\n";
+			<< " Done setting callerSchedHandle; running CallerFlowExecutor.\n";
+		return calleePromise.postBackStatus.getCallerFlowExecutor()();
 	}
 
-	auto await_resume() const
+	auto await_resume()
 	{
+		calleePromise.postBackStatus.reset();
+
 		ReturnValues<T> &returnValues = calleePromise.returnValues;
 		std::cout << __func__ << ": " << std::this_thread::get_id()
 			<< " About to check for and rethrow any exception.\n";

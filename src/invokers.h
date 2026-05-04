@@ -48,7 +48,7 @@ struct NonViralNonSuspendingInvoker
 		std::cout << __func__ << ": " << std::this_thread::get_id() << " This shouldn't be called.\n";
 	}
 
-	void await_resume() const noexcept
+	void await_resume() noexcept
 	{
 		std::cout << __func__ << ": " << std::this_thread::get_id() << " This shouldn't be called.\n";
 	}
@@ -85,17 +85,19 @@ struct ViralSuspendingInvoker
 	}
 
 	template <typename CallerPromise>
-	void await_suspend(std::coroutine_handle<CallerPromise> callerSchedHandle) noexcept
+	bool await_suspend(std::coroutine_handle<CallerPromise> callerSchedHandle) noexcept
 	{
 		static_assert(
 			std::is_base_of_v<PromiseChainLink, CallerPromise>,
 			"ViralSuspendingInvoker caller promise must derive from PromiseChainLink");
-		std::cout << __func__ << ": " << std::this_thread::get_id() << " Setting callerSchedHandle and 'suspending'.\n";
-		this->setCallerSchedHandle(callerSchedHandle);
-		std::cout << __func__ << ": " << std::this_thread::get_id() << " Done setting callerSchedHandle. 'Suspending' now.\n";
+		std::cout << __func__ << ": " << std::this_thread::get_id() << " Setting callerSchedHandle.\n";
+		const bool suspendCaller = this->setCallerSchedHandle(callerSchedHandle);
+		std::cout << __func__ << ": " << std::this_thread::get_id()
+			<< " CallerFlowExecutor returned suspend=" << suspendCaller << ".\n";
+		return suspendCaller;
 	}
 
-	T await_resume() const
+	T await_resume()
 	{
 		std::cout << __func__ << ": " << std::this_thread::get_id() << " Resumed on caller thread, hopefully.\n";
 		return PostingInvoker<PostingPromiseTemplate<T>, T>::await_resume();
