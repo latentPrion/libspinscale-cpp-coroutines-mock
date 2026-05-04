@@ -1,0 +1,4 @@
+set pagination off
+run
+thread apply all bt full
+quit

@@ -4,6 +4,7 @@
 #include <coroutine>
 #include <deque>
 #include <iostream>
+#include <memory>
 #include <thread>
 
 #include <boost/asio/io_context.hpp>
@@ -26,10 +27,42 @@
 class CoConditionVariable
 {
 public:
-	struct WaitingCoroutine
+	/**	Waiter queued under the CV spin lock; `signal()` drains and calls `post()`. */
+	class WaitingCoroutineBase
 	{
-		std::coroutine_handle<void> callerSchedHandle;
+	public:
+		explicit WaitingCoroutineBase(
+			boost::asio::io_context &callerIoContextIn) noexcept
+		: callerIoContext(callerIoContextIn)
+		{}
+
+		virtual ~WaitingCoroutineBase() = default;
+
+		virtual void post() noexcept = 0;
+
+	public:
 		boost::asio::io_context &callerIoContext;
+	};
+
+	template <typename Promise>
+	class TypedWaitingCoroutine
+	:	public WaitingCoroutineBase
+	{
+	public:
+		TypedWaitingCoroutine(
+			boost::asio::io_context &callerIoContextIn,
+			std::coroutine_handle<Promise> callerSchedHandleIn) noexcept
+		: WaitingCoroutineBase(callerIoContextIn),
+		  callerSchedHandle(callerSchedHandleIn)
+		{}
+
+		void post() noexcept override
+		{
+			boost::asio::post(callerIoContext, callerSchedHandle);
+		}
+
+	public:
+		std::coroutine_handle<Promise> callerSchedHandle;
 	};
 
 	struct OperationInvoker
@@ -60,8 +93,8 @@ public:
 
 			std::cout << __func__ << ": " << std::this_thread::get_id()
 				<< " CV not signaled: Enqueuing waiter coroutine.\n";
-			parentCv.waitingCoroutines.emplace_back(WaitingCoroutine{
-				cvCallerSchedHandle, cvCallerIoContext});
+			parentCv.enqueueWaitingCoroutine(
+				cvCallerSchedHandle, cvCallerIoContext);
 
 			return true;
 		}
@@ -107,8 +140,8 @@ public:
 
 			std::cout << __func__ << ": " << std::this_thread::get_id()
 				<< " CV not signaled: returning not-signaled DecisionFactors.\n";
-			parentCv.waitingCoroutines.emplace_back(WaitingCoroutine{
-				cvCallerSchedHandle, cvCallerIoContext});
+			parentCv.enqueueWaitingCoroutine(
+				cvCallerSchedHandle, cvCallerIoContext);
 
 			return DecisionFactors(parentCv.spinLock, false);
 		}
@@ -134,18 +167,17 @@ public:
 
 	void signal() noexcept
 	{
-		std::deque<WaitingCoroutine> drained;
+		std::deque<std::unique_ptr<WaitingCoroutineBase>> drained;
 
 		{
 			sscl::SpinLock::Guard guard(spinLock);
 			isSignaled = true;
 			drained.swap(waitingCoroutines);
+//			isSignaled = false;
 		}
 
-		for (WaitingCoroutine &entry : drained)
-		{
-			boost::asio::post(
-				entry.callerIoContext, entry.callerSchedHandle);
+		for (std::unique_ptr<WaitingCoroutineBase> &waiter : drained) {
+			waiter->post();
 		}
 	}
 
@@ -156,10 +188,19 @@ public:
 		isSignaled = false;
 	}
 
+	template <typename Promise>
+	void enqueueWaitingCoroutine(
+		std::coroutine_handle<Promise> handle,
+		boost::asio::io_context &ctx) noexcept
+	{
+		waitingCoroutines.push_back(
+			std::make_unique<TypedWaitingCoroutine<Promise>>(ctx, handle));
+	}
+
 private:
 	sscl::SpinLock spinLock;
 	bool isSignaled = false;
-	std::deque<WaitingCoroutine> waitingCoroutines;
+	std::deque<std::unique_ptr<WaitingCoroutineBase>> waitingCoroutines;
 };
 
 #endif // CO_CONDITION_VARIABLE_H

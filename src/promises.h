@@ -234,8 +234,7 @@ struct PostingPromise
 				std::cout << __func__ << ": " << std::this_thread::get_id()
 					<< " Viral: condvar was already signaled: post-back-ing callerSchedHandle resume to caller io_context.\n";
 				boost::asio::post(
-					callerIoContext,
-					calleePromise.callerSchedHandle);
+					callerIoContext, calleePromise.callerSchedHandle);
 			}
 			else
 			{
@@ -245,6 +244,7 @@ struct PostingPromise
 				decisionFactors->cvInternalSpinLock.release();
 			}
 
+			calleePromise.callerSchedHandleIsSetCv.clear();
 			return true;
 		}
 
@@ -265,8 +265,7 @@ struct PostingPromise
 			 *	two contexts coincide.
 			 */
 			boost::asio::post(
-				callerIoContext,
-				calleePromise.callerSchedHandle);
+				callerIoContext, calleePromise.callerSchedHandle);
 		}
 
 	private:
