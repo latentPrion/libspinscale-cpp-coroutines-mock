@@ -44,6 +44,7 @@ struct CalleeCoroutineHandleDestroyer
 
 	~CalleeCoroutineHandleDestroyer() noexcept
 	{
+		std::cout << __func__ << ": " << std::this_thread::get_id() << " Destroying.\n";
 		if (selfSchedHandle) {
 			selfSchedHandle.destroy();
 		}
@@ -216,7 +217,7 @@ struct PostingPromise
 
 	PostingPromise(
 		std::exception_ptr &_callerExceptionPtr,
-		std::function<void(CalleeCoroutineHandleDestroyer)> _callerLambda) noexcept
+		std::function<void()> _callerLambda) noexcept
 	: returnValues(_callerExceptionPtr),
 	callerLambda(std::move(_callerLambda)),
 	postBackStatus(*this)
@@ -249,14 +250,24 @@ struct PostingPromise
 	 */
 	std::suspend_always final_suspend() noexcept
 	{
-		if (callerLambda) {
+		if (callerLambda)
+		{
 			std::cout << __func__ << ": " << std::this_thread::get_id()
 				<< " Non-viral: posting callerLambda completion to callerIoContext.\n";
-			boost::asio::post(callerIoContext, [this]() noexcept {
-				callerLambda(CalleeCoroutineHandleDestroyer(selfSchedHandle));
+			boost::asio::post(
+				callerIoContext,
+				[this]()
+			{
+				CalleeCoroutineHandleDestroyer completion(selfSchedHandle);
+				if (returnValues.myExceptionPtr) {
+					std::rethrow_exception(returnValues.myExceptionPtr);
+				}
+
+				callerLambda();
 			});
 		}
-		else {
+		else
+		{
 			std::cout << __func__ << ": " << std::this_thread::get_id()
 				<< " Viral: running CalleeFlowExecutor.\n";
 			postBackStatus.getCalleeFlowExecutor()();
@@ -265,7 +276,7 @@ struct PostingPromise
 	}
 
 	ReturnValues<T> returnValues;
-	std::function<void(CalleeCoroutineHandleDestroyer)> callerLambda;
+	std::function<void()> callerLambda;
 	boost::asio::io_context &callerIoContext = current_io_context();
 	std::coroutine_handle<> selfSchedHandle;
 	std::coroutine_handle<void> callerSchedHandle;
@@ -298,7 +309,7 @@ struct TaggedPostingPromise
 
 	TaggedPostingPromise(
 		std::exception_ptr &_exceptionPtr,
-		std::function<void(CalleeCoroutineHandleDestroyer)> _callerLambda) noexcept
+		std::function<void()> _callerLambda) noexcept
 	:	PostingPromise<T>(_exceptionPtr, std::move(_callerLambda))
 	{}
 

@@ -101,7 +101,7 @@ WorldViralInvoker<std::string> print2Strings(std::string arg1, std::string arg2)
 }
 
 BodyNonViralNonSuspendingInvoker initializeCReq(
-	std::exception_ptr &, std::function<void(CalleeCoroutineHandleDestroyer)>)
+	std::exception_ptr &, std::function<void()>)
 {
 	std::cout << __func__ << ": " << std::this_thread::get_id() << " Executing.\n";
 	// throw std::runtime_error("initializeCReq exception");
@@ -209,16 +209,10 @@ int main() {
 	/*BodyNonViralNonSuspendingInvoker invoker =*/
 	std::exception_ptr initializeCReqExceptionPtr = nullptr;
 	initializeCReq(
-		initializeCReqExceptionPtr,
-		[&initializeCReqExceptionPtr, &keep_looping] (CalleeCoroutineHandleDestroyer)
+		initializeCReqExceptionPtr, []
 	{
-		std::cout << __func__ << ": " << std::this_thread::get_id() << " About to check if initializeCReq threw an exception.\n";
-		if (initializeCReqExceptionPtr)
-		{
-			keep_looping = false;
-			mainIoContext.stop();
-			std::rethrow_exception(initializeCReqExceptionPtr);
-		}
+		std::cout << "initializeCReq caller completion: " << std::this_thread::get_id()
+			<< " (callee frame is destroyed after this returns; exceptions were handled before this callback).\n";
 	});
 	std::cout << __func__ << ": " << std::this_thread::get_id() << " initializeCReq returned.\n";
 

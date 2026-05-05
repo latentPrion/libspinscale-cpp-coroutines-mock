@@ -41,34 +41,19 @@ public:
 		std::cout << __func__ << ": " << std::this_thread::get_id()
 			<< " About to check for and rethrow any exception.\n";
 
-#define CALLEE_PROMISE_DESTROY_ONCE
-#ifdef CALLEE_PROMISE_DESTROY_ONCE
 		CalleeCoroutineHandleDestroyer completion(
 			calleePromise.selfSchedHandle);
-#endif
 
 		if (returnValues.myExceptionPtr)
 		{
 			std::exception_ptr const captured = returnValues.myExceptionPtr;
-#ifndef CALLEE_PROMISE_DESTROY_ONCE
-			CalleeCoroutineHandleDestroyer completion(
-				calleePromise.selfSchedHandle);
-#endif
 			std::rethrow_exception(captured);
 		}
-		if constexpr (!std::is_void_v<T>) {
+		if constexpr (!std::is_void_v<T>)
+		{
 			T result = std::move(returnValues.myReturnValue);
-#ifndef CALLEE_PROMISE_DESTROY_ONCE
-			CalleeCoroutineHandleDestroyer completion(
-				calleePromise.selfSchedHandle);
-#endif
-		return result;
+			return result;
 		}
-
-#ifndef CALLEE_PROMISE_DESTROY_ONCE
-		CalleeCoroutineHandleDestroyer completion(
-			calleePromise.selfSchedHandle);
-#endif
 	}
 
 private:

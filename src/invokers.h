@@ -24,8 +24,20 @@ struct NonViralNonSuspendingInvoker
 		NonViralNonSuspendingInvoker<PostingPromiseTemplate> get_return_object()
 		{
 			std::cout << __func__ << ": " << std::this_thread::get_id() << " Returning NonViralNonSuspendingInvoker.\n";
-			if (!this->callerLambda) {
-				throw std::runtime_error("Missing completion lambda: non-viral coroutine would leak frame because no destroy() owner was provided.");
+			if (!this->callerLambda)
+			{
+				/**	EXPLANATION:
+				 * We require a completion lambda to be provided to the
+				 * non-viral coroutines, because that's how we internally
+				 * distinguish between non-viral and viral coroutines.
+				 *
+				 * Additionally, non-viral coroutines almost never have a
+				 * good reason to not have a completion lambda.
+				 */
+				std::ostringstream oss;
+				oss << std::this_thread::get_id()
+					<< ": Missing completion lambda: non-viral coroutines require a completion lambda.";
+				throw std::runtime_error(oss.str());
 			}
 
 			this->setSelfSchedHandle(
