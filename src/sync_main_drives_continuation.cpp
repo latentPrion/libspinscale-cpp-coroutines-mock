@@ -112,6 +112,7 @@ BodyNonViralNonSuspendingInvoker initializeCReq(
 	std::string returnedString = co_await deferredPrint2StringsResult;
 //	auto r3 = co_await initializeCReqLock.getAcquireInvocationAndSuspensionPolicy();
 	std::cout << __func__ << ": " << std::this_thread::get_id() << " print2Strings returned: " << returnedString << "\n";
+	throw std::runtime_error("initializeCReq exception test!");
 	co_return;
 }
 
@@ -247,6 +248,9 @@ int main() {
 
 		if (send_exception_ind) {
 			std::cerr << "main: loop exception hook stand-in\n";
+			finalizeAllThreads(
+				body_keep_looping, world_keep_looping,
+				leg_keep_looping, keep_looping);
 		}
 	}
 
