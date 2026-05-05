@@ -115,6 +115,30 @@ BodyNonViralNonSuspendingInvoker initializeCReq(
 	co_return;
 }
 
+void finalizeAllThreads(
+	bool &body_keep_looping,
+	bool &world_keep_looping,
+	bool &leg_keep_looping,
+	bool &keep_looping)
+{
+	boost::asio::post(bodyIoContext, [&body_keep_looping] {
+		body_keep_looping = false;
+		bodyIoContext.stop();
+	});
+	boost::asio::post(mainIoContext, [&keep_looping] {
+		keep_looping = false;
+		mainIoContext.stop();
+	});
+	boost::asio::post(worldIoContext, [&world_keep_looping] {
+		world_keep_looping = false;
+		worldIoContext.stop();
+	});
+	boost::asio::post(legIoContext, [&leg_keep_looping] {
+		leg_keep_looping = false;
+		legIoContext.stop();
+	});
+}
+
 void runNamedContextThreadLoop(
 	boost::asio::io_context &context,
 	bool &keepLooping,
@@ -179,22 +203,9 @@ int main() {
 		if (errorCode) {
 			return;
 		}
-		boost::asio::post(bodyIoContext, [&body_keep_looping] {
-			bodyIoContext.stop();
-			body_keep_looping = false;
-		});
-		boost::asio::post(mainIoContext, [&keep_looping] {
-			mainIoContext.stop();
-			keep_looping = false;
-		});
-		boost::asio::post(worldIoContext, [&world_keep_looping] {
-			worldIoContext.stop();
-			world_keep_looping = false;
-		});
-		boost::asio::post(legIoContext, [&leg_keep_looping] {
-			legIoContext.stop();
-			leg_keep_looping = false;
-		});
+		finalizeAllThreads(
+			body_keep_looping, world_keep_looping,
+			leg_keep_looping, keep_looping);
 	});
 
 	std::thread body_thread(bodyThreadEntry, std::ref(body_keep_looping));
@@ -209,10 +220,14 @@ int main() {
 	/*BodyNonViralNonSuspendingInvoker invoker =*/
 	std::exception_ptr initializeCReqExceptionPtr = nullptr;
 	initializeCReq(
-		initializeCReqExceptionPtr, []
+		initializeCReqExceptionPtr,
+		[&body_keep_looping, &world_keep_looping, &leg_keep_looping, &keep_looping]()
 	{
 		std::cout << "initializeCReq caller completion: " << std::this_thread::get_id()
 			<< " (callee frame is destroyed after this returns; exceptions were handled before this callback).\n";
+		finalizeAllThreads(
+			body_keep_looping, world_keep_looping,
+			leg_keep_looping, keep_looping);
 	});
 	std::cout << __func__ << ": " << std::this_thread::get_id() << " initializeCReq returned.\n";
 
