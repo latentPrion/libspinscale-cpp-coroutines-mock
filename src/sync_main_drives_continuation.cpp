@@ -108,11 +108,11 @@ BodyNonViralNonSuspendingInvoker initializeCReq(
 	std::cout << __func__ << ": " << std::this_thread::get_id() << " About to co_await print2Strings.\n";
 	auto r2 = co_await initializeCReqLock.getAcquireInvocationAndSuspensionPolicy();
 	auto deferredPrint2StringsResult = print2Strings("Hello", "World");
-	std::this_thread::sleep_for(std::chrono::seconds(2));
+//	std::this_thread::sleep_for(std::chrono::seconds(2));
 	std::string returnedString = co_await deferredPrint2StringsResult;
 //	auto r3 = co_await initializeCReqLock.getAcquireInvocationAndSuspensionPolicy();
 	std::cout << __func__ << ": " << std::this_thread::get_id() << " print2Strings returned: " << returnedString << "\n";
-	throw std::runtime_error("initializeCReq exception test!");
+//	throw std::runtime_error("initializeCReq exception test!");
 	co_return;
 }
 
@@ -216,7 +216,7 @@ int main() {
 	std::cout << __func__ << ": My TID is: " << std::this_thread::get_id() << ".\n";
 	/* Give the body thread time to start up and wait on its io context.
 	 */
-	std::this_thread::sleep_for(std::chrono::milliseconds(500));
+//	std::this_thread::sleep_for(std::chrono::milliseconds(500));
 	std::cout << __func__ << ": " << std::this_thread::get_id() << " About to call initializeCReq.\n";
 	/*BodyNonViralNonSuspendingInvoker invoker =*/
 	std::exception_ptr initializeCReqExceptionPtr = nullptr;
