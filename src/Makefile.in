@@ -100,7 +100,7 @@ CONFIG_CLEAN_VPATH_FILES =
 am__installdirs = "$(DESTDIR)$(bindir)"
 PROGRAMS = $(bin_PROGRAMS)
 am_sync_main_drives_continuation_OBJECTS =  \
-	sync_main_drives_continuation.$(OBJEXT)
+	childThreads.$(OBJEXT) sync_main_drives_continuation.$(OBJEXT)
 sync_main_drives_continuation_OBJECTS =  \
 	$(am_sync_main_drives_continuation_OBJECTS)
 sync_main_drives_continuation_LDADD = $(LDADD)
@@ -119,7 +119,8 @@ am__v_at_1 =
 DEFAULT_INCLUDES = -I.@am__isrc@ -I$(top_builddir)
 depcomp = $(SHELL) $(top_srcdir)/depcomp
 am__maybe_remake_depfiles = depfiles
-am__depfiles_remade = ./$(DEPDIR)/sync_main_drives_continuation.Po
+am__depfiles_remade = ./$(DEPDIR)/childThreads.Po \
+	./$(DEPDIR)/sync_main_drives_continuation.Po
 am__mv = mv -f
 CXXCOMPILE = $(CXX) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) \
 	$(AM_CPPFLAGS) $(CPPFLAGS) $(AM_CXXFLAGS) $(CXXFLAGS)
@@ -271,6 +272,8 @@ AM_LDFLAGS = @BOOST_LDFLAGS@
 # awaitable_returnable_to_caller_SOURCES = awaitable-returnable-to-caller.cpp
 # get_ret_obj_must_return_awaitable_SOURCES = get_ret_obj_must_return_awaitable.cpp
 sync_main_drives_continuation_SOURCES = \
+	childThreads.cpp \
+	childThreads.h \
 	coConditionVariable.h \
 	invokers.h \
 	postingInvoker.h \
@@ -363,6 +366,7 @@ mostlyclean-compile:
 distclean-compile:
 	-rm -f *.tab.c
 
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/childThreads.Po@am__quote@ # am--include-marker
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/sync_main_drives_continuation.Po@am__quote@ # am--include-marker
 
 $(am__depfiles_remade):
@@ -513,6 +517,7 @@ clean: clean-am
 clean-am: clean-binPROGRAMS clean-generic mostlyclean-am
 
 distclean: distclean-am
+		-rm -f ./$(DEPDIR)/childThreads.Po
 		-rm -f ./$(DEPDIR)/sync_main_drives_continuation.Po
 	-rm -f Makefile
 distclean-am: clean-am distclean-compile distclean-generic \
@@ -559,6 +564,7 @@ install-ps-am:
 installcheck-am:
 
 maintainer-clean: maintainer-clean-am
+		-rm -f ./$(DEPDIR)/childThreads.Po
 		-rm -f ./$(DEPDIR)/sync_main_drives_continuation.Po
 	-rm -f Makefile
 maintainer-clean-am: distclean-am maintainer-clean-generic

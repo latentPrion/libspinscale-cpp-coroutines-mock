@@ -1,78 +1,20 @@
 #include <coroutine>
 #include <cstdlib>
+#include <csignal>
+#include <chrono>
 #include <exception>
+#include <functional>
 #include <iostream>
 #include <stdexcept>
 #include <thread>
-#include <functional>
+
 #include <boost/asio/io_context.hpp>
 #include <boost/asio/post.hpp>
 #include <boost/asio/signal_set.hpp>
-#include <boost/asio/executor_work_guard.hpp>
 
+#include "childThreads.h"
+#include "coQutex.h"
 #include "current_io_context.h"
-#include "promises.h"
-#include "invokers.h"
-
-thread_local boost::asio::io_context *tls_current_io_context = nullptr;
-
-boost::asio::io_context &current_io_context() {
-	if (!tls_current_io_context) {
-		throw std::runtime_error("TLS io_context is not set");
-	}
-	return *tls_current_io_context;
-}
-
-boost::asio::io_context mainIoContext, bodyIoContext, worldIoContext, legIoContext;
-boost::asio::executor_work_guard<
-	boost::asio::io_context::executor_type> bodyIoContextIdleDoesNotEndRun(
-		bodyIoContext.get_executor());
-boost::asio::executor_work_guard<
-	boost::asio::io_context::executor_type> worldIoContextIdleDoesNotEndRun(
-		worldIoContext.get_executor());
-boost::asio::executor_work_guard<
-	boost::asio::io_context::executor_type> legIoContextIdleDoesNotEndRun(
-		legIoContext.get_executor());
-
-struct BodyThreadTag
-{
-	static boost::asio::io_context &io_context() noexcept
-		{ return bodyIoContext; }
-};
-
-struct WorldThreadTag
-{
-	static boost::asio::io_context &io_context() noexcept
-		{ return worldIoContext; }
-};
-
-struct LegThreadTag
-{
-	static boost::asio::io_context &io_context() noexcept
-		{ return legIoContext; }
-};
-
-template <typename T>
-using BodyPostingPromise = TaggedPostingPromise<T, BodyThreadTag>;
-
-template <typename T>
-using WorldPostingPromise = TaggedPostingPromise<T, WorldThreadTag>;
-
-template <typename T>
-using LegPostingPromise = TaggedPostingPromise<T, LegThreadTag>;
-
-using BodyNonViralNonSuspendingInvoker = NonViralNonSuspendingInvoker<BodyPostingPromise>;
-using WorldNonViralNonSuspendingInvoker = NonViralNonSuspendingInvoker<WorldPostingPromise>;
-using LegNonViralNonSuspendingInvoker = NonViralNonSuspendingInvoker<LegPostingPromise>;
-
-template <typename T>
-using BodyViralInvoker = ViralSuspendingInvoker<BodyPostingPromise, T>;
-
-template <typename T>
-using WorldViralInvoker = ViralSuspendingInvoker<WorldPostingPromise, T>;
-
-template <typename T>
-using LegViralInvoker = ViralSuspendingInvoker<LegPostingPromise, T>;
 
 CoQutex initializeCReqLock;
 
@@ -108,7 +50,7 @@ BodyNonViralNonSuspendingInvoker initializeCReq(
 	std::cout << __func__ << ": " << std::this_thread::get_id() << " About to co_await print2Strings.\n";
 	auto r2 = co_await initializeCReqLock.getAcquireInvocationAndSuspensionPolicy();
 	auto deferredPrint2StringsResult = print2Strings("Hello", "World");
-//	std::this_thread::sleep_for(std::chrono::seconds(2));
+	std::this_thread::sleep_for(std::chrono::milliseconds(750));
 	std::string returnedString = co_await deferredPrint2StringsResult;
 //	auto r3 = co_await initializeCReqLock.getAcquireInvocationAndSuspensionPolicy();
 	std::cout << __func__ << ": " << std::this_thread::get_id() << " print2Strings returned: " << returnedString << "\n";
@@ -140,57 +82,8 @@ void finalizeAllThreads(
 	});
 }
 
-void runNamedContextThreadLoop(
-	boost::asio::io_context &context,
-	bool &keepLooping,
-	const char *contextName);
-
-void bodyThreadEntry(bool &body_keep_looping)
+int main()
 {
-	runNamedContextThreadLoop(bodyIoContext, body_keep_looping, "body");
-}
-
-void runNamedContextThreadLoop(
-	boost::asio::io_context &context,
-	bool &keepLooping,
-	const char *contextName)
-{
-	tls_current_io_context = &context;
-
-	std::cout << __func__ << " (" << contextName << "): My TID is: " << std::this_thread::get_id() << ".\n";
-
-	for (keepLooping = true; keepLooping;) {
-		bool send_exception_ind = false;
-
-		try {
-			context.restart();
-			context.run();
-		} catch (const std::exception &exception) {
-			send_exception_ind = true;
-			std::cerr << contextName << ": Exception occurred: " << exception.what() << "\n";
-		} catch (...) {
-			send_exception_ind = true;
-			std::cerr << contextName << ": Unknown exception occurred\n";
-		}
-
-		if (send_exception_ind) {
-			std::cerr << contextName << ": loop exception hook stand-in\n";
-		}
-	}
-	tls_current_io_context = nullptr;
-}
-
-void worldThreadEntry(bool &world_keep_looping)
-{
-	runNamedContextThreadLoop(worldIoContext, world_keep_looping, "world");
-}
-
-void legThreadEntry(bool &leg_keep_looping)
-{
-	runNamedContextThreadLoop(legIoContext, leg_keep_looping, "leg");
-}
-
-int main() {
 	tls_current_io_context = &mainIoContext;
 	bool keep_looping = true;
 	bool body_keep_looping = true;
