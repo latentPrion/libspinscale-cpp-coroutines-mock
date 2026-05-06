@@ -211,6 +211,63 @@ struct PostingPromise
 		bool calleeIsReadyToPostBack = false;
 	};
 
+	struct InitialSuspendPostingInvoker
+	:	public std::suspend_always
+	{
+		InitialSuspendPostingInvoker(
+			boost::asio::io_context &targetIoContextIn,
+			std::coroutine_handle<> targetSchedHandleIn) noexcept
+		:	targetIoContext(targetIoContextIn),
+		targetSchedHandle(targetSchedHandleIn)
+		{}
+
+		bool await_suspend(std::coroutine_handle<> const) noexcept
+		{
+			boost::asio::post(targetIoContext, targetSchedHandle);
+			return true;
+		}
+
+		boost::asio::io_context &targetIoContext;
+		std::coroutine_handle<> targetSchedHandle;
+	};
+
+	struct FinalSuspendPostingInvoker
+	:	public std::suspend_always
+	{
+		explicit FinalSuspendPostingInvoker(PostingPromise &calleePromiseIn) noexcept
+		:	calleePromise(calleePromiseIn)
+		{}
+
+		bool await_suspend(std::coroutine_handle<> const) noexcept
+		{
+			if (calleePromise.callerLambda)
+			{
+				std::cout << "final_suspend" << ": " << std::this_thread::get_id()
+					<< " Non-viral: posting callerLambda completion to callerIoContext.\n";
+				boost::asio::post(
+					calleePromise.callerIoContext,
+					[&calleeRef = calleePromise]()
+					{
+						CalleeCoroutineHandleDestroyer completion(calleeRef.selfSchedHandle);
+						if (calleeRef.returnValues.myExceptionPtr) {
+							std::rethrow_exception(calleeRef.returnValues.myExceptionPtr);
+						}
+
+						calleeRef.callerLambda();
+					});
+			}
+			else
+			{
+				std::cout << "final_suspend" << ": " << std::this_thread::get_id()
+					<< " Viral: running CalleeFlowExecutor.\n";
+				calleePromise.postBackStatus.getCalleeFlowExecutor()();
+			}
+			return true;
+		}
+
+		PostingPromise &calleePromise;
+	};
+
 	PostingPromise() noexcept
 	: returnValues(), postBackStatus(*this)
 	{}
@@ -247,32 +304,12 @@ struct PostingPromise
 	/**	Non-viral: post completion lambda to callerIoContext from this thread.
 	 *	Viral: run CalleeFlowExecutor (handshake flags); caller may post caller resume
 	 *	later via CallerFlowExecutor. See docs/caller-posts-to-own-io-context.md.
+	 *	Work runs in FinalSuspendPostingInvoker::await_suspend after the suspend point
+	 *	advances (see docs/prompts/post-to-and-back-in-invokables.md).
 	 */
-	std::suspend_always final_suspend() noexcept
+	auto final_suspend() noexcept
 	{
-		if (callerLambda)
-		{
-			std::cout << __func__ << ": " << std::this_thread::get_id()
-				<< " Non-viral: posting callerLambda completion to callerIoContext.\n";
-			boost::asio::post(
-				callerIoContext,
-				[this]()
-			{
-				CalleeCoroutineHandleDestroyer completion(selfSchedHandle);
-				if (returnValues.myExceptionPtr) {
-					std::rethrow_exception(returnValues.myExceptionPtr);
-				}
-
-				callerLambda();
-			});
-		}
-		else
-		{
-			std::cout << __func__ << ": " << std::this_thread::get_id()
-				<< " Viral: running CalleeFlowExecutor.\n";
-			postBackStatus.getCalleeFlowExecutor()();
-		}
-		return {};
+		return FinalSuspendPostingInvoker(*this);
 	}
 
 	ReturnValues<T> returnValues;
@@ -313,14 +350,13 @@ struct TaggedPostingPromise
 	:	PostingPromise<T>(_exceptionPtr, std::move(_callerLambda))
 	{}
 
-	std::suspend_always initial_suspend() noexcept
+	auto initial_suspend() noexcept
 	{
 		std::cout << __func__ << ": " << std::this_thread::get_id() << " About to post selfSchedHandle to " << typeid(ThreadTag).name() << ".\n";
-		boost::asio::post(
+		std::cout << __func__ << ": " << std::this_thread::get_id() << " Returning InitialSuspendPostingInvoker.\n";
+		return typename PostingPromise<T>::InitialSuspendPostingInvoker(
 			ThreadTag::io_context(),
 			this->selfSchedHandle);
-		std::cout << __func__ << ": " << std::this_thread::get_id() << " Returning suspend_always.\n";
-		return {};
 	}
 };
 
