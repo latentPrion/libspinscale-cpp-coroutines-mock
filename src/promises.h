@@ -211,6 +211,13 @@ struct PostingPromise
 		bool calleeIsReadyToPostBack = false;
 	};
 
+	/**	Post-to must run from this awaiter's await_suspend, not synchronously inside
+	 *	promise.initial_suspend() before it returns: the implementation's hidden coroutine
+	 *	state (async segment / suspend index used on the next resume()) is only updated
+	 *	after initial_suspend has finished returning its awaiter. Posting the handle too
+	 *	early lets the callee resume before that update and re-enter initial_suspend from
+	 *	the start, duplicating the post. See docs/prompts/post-to-and-back-in-invokables.md.
+	 */
 	struct InitialSuspendPostingInvoker
 	:	public std::suspend_always
 	{
@@ -231,6 +238,13 @@ struct PostingPromise
 		std::coroutine_handle<> targetSchedHandle;
 	};
 
+	/**	Post-back (non-viral completion post; viral CalleeFlowExecutor) must run from this
+	 *	awaiter's await_suspend, not synchronously inside promise.final_suspend() before it
+	 *	returns: the hidden coroutine segment index in the coroutine state is only advanced
+	 *	after final_suspend exits. Doing that work inside final_suspend's body risks the same
+	 *	kind of ordering bug as initial_suspend—resume observing the wrong segment. See
+	 *	docs/prompts/post-to-and-back-in-invokables.md.
+	 */
 	struct FinalSuspendPostingInvoker
 	:	public std::suspend_always
 	{
