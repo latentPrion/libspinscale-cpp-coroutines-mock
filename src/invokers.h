@@ -106,6 +106,18 @@ struct ViralSuspendingInvoker
 		const bool suspendCaller = this->setCallerSchedHandle(callerSchedHandle);
 		std::cout << __func__ << ": " << std::this_thread::get_id()
 			<< " CallerFlowExecutor returned suspend=" << suspendCaller << ".\n";
+
+		/**	EXPLANATION:
+		 * If the callee was ready to post-back, then we don't need to
+		 * suspend the caller -- so return either false or
+		 * a symmetric transfer handle to the `callerSchedHandle` we were
+		 * passed as an argument.
+		 *
+		 * If the callee is not ready to post-back, then we need to suspend
+		 * the caller so that the caller can suspend until the callee posts
+		 * the callerSchedHandle to the callerIoContext -- so return true
+		 * or std::noop_coroutine().
+		 */
 		return suspendCaller;
 	}
 
