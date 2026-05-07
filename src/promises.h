@@ -286,9 +286,11 @@ struct PostingPromise
 	: returnValues(), postBackStatus(*this)
 	{}
 
+	template <typename... TailArgs>
 	PostingPromise(
 		std::exception_ptr &_callerExceptionPtr,
-		std::function<void()> _callerLambda) noexcept
+		std::function<void()> _callerLambda,
+		TailArgs &&...) noexcept
 	: returnValues(_callerExceptionPtr),
 	callerLambda(std::move(_callerLambda)),
 	postBackStatus(*this)
@@ -358,10 +360,15 @@ struct TaggedPostingPromise
 	:	PostingPromise<T>()
 	{}
 
+	template <typename... TailArgs>
 	TaggedPostingPromise(
 		std::exception_ptr &_exceptionPtr,
-		std::function<void()> _callerLambda) noexcept
-	:	PostingPromise<T>(_exceptionPtr, std::move(_callerLambda))
+		std::function<void()> _callerLambda,
+		TailArgs &&... tailArgs) noexcept
+	:	PostingPromise<T>(
+			_exceptionPtr,
+			std::move(_callerLambda),
+			std::forward<TailArgs>(tailArgs)...)
 	{}
 
 	auto initial_suspend() noexcept

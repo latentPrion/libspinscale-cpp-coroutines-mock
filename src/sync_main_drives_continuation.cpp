@@ -43,9 +43,10 @@ WorldViralInvoker<std::string> print2Strings(std::string arg1, std::string arg2)
 }
 
 BodyNonViralNonSuspendingInvoker initializeCReq(
-	std::exception_ptr &, std::function<void()>)
+	std::exception_ptr &, std::function<void()>,
+	int arg3, std::string arg4)
 {
-	std::cout << __func__ << ": " << std::this_thread::get_id() << " Executing.\n";
+	std::cout << __func__ << ": " << std::this_thread::get_id() << " Executing: " << arg3 << " " << arg4 << ".\n";
 	// throw std::runtime_error("initializeCReq exception");
 	std::cout << __func__ << ": " << std::this_thread::get_id() << " About to co_await print2Strings.\n";
 	auto r2 = co_await initializeCReqLock.getAcquireInvocationAndSuspensionPolicy();
@@ -122,7 +123,8 @@ int main()
 		finalizeAllThreads(
 			body_keep_looping, world_keep_looping,
 			leg_keep_looping, keep_looping);
-	});
+	},
+		4, "KEKW");
 	std::cout << __func__ << ": " << std::this_thread::get_id() << " initializeCReq returned.\n";
 
 	for (keep_looping = true; keep_looping;) {
