@@ -156,6 +156,10 @@ concept AwaitablerOrAwaiterIface = <...>;
 
 struct Group
 {
+	enum AwaitingCondition {
+		NONE, FIRST_SETTLED, ALL_SETTLED
+	};
+
 	template <class AwaitableOrAwaiterIface, class SubjectInvokerReturnType>
 	class SettlementDescriptor
 	{
@@ -199,61 +203,6 @@ struct Group
 	getAwaitAllSettlementsInvoker()
 		{ return AwaitAllSettlementsInvoker(*this); }
 
-	struct SettlementAwaitingInvoker
-	{
-		SettlementAwaitingInvoker(Group &_group)
-		: parentGroup(_group)
-		{}
-
-		void await_suspend(std::coroutine_handle<> _groupAwaiterSchedHandle)
-		{
-			/* Nothing to do here: maybe we can check again?
-			 * But otherwise, we store away the coro_handle of the
-			 * awaiting caller, and suspend the caller.
-			 */
-			groupAwaiterSchedHandle = _groupAwaiterSchedHandle;
-		}
-
-		Group &parentGroup;
-	};
-
-	struct AwaitFirstSettlementInvoker
-	:	public SettlementAwaitingInvoker
-	{
-		using SettlementAwaitingInvoker::SettlementAwaitingInvoker;
-
-		bool await_ready()
-		{
-			sscl::SpinLock::Guard(spinLock);
-
-			if (firstSettledInvokerIndex >= 0)
-				{ return true; }
-
-			return false;
-		}
-
-		std::pair<
-			SettlementDescriptor &,
-			std::vector<SettlementDescriptor> &>
-		await_resume()
-		{
-			assert(firstSettledInvokerIndex >= 0);
-
-			return {
-				settlements[firstSettledInvokerIndex],
-				settlements
-			}
-		}
-	};
-
-	struct AwaitAllSettlementsInvoker
-	:	public SettlementAwaitingInvoker
-	{
-		using SettlementAwaitingInvoker::SettlementAwaitingInvoker;
-
-		bool await_ready();
-	};
-
 	bool verifyAllInvokersSettled(void)
 	{
 		for (desc: s.rsrc.settlements) {
@@ -263,6 +212,9 @@ struct Group
 		return true;
 	}
 
+	bool firstInvokerSettled(void)
+		{ return s.rsrc.firstSettledInvokerIdx >= 0; }
+
 	bool allInvokersSettled(void)
 	{
 		auto nInvokersAdded = s.rsrc.settlements.size();
@@ -270,29 +222,148 @@ struct Group
 		return s.rsrc.nInvokersSettled == nInvokersAdded;
 	}
 
-	updateSettlementsState(
-		std::vector<SettlementDescriptor>::iterator &_settlementIt,
-		bool invokerAwaitingFirstSettlement, bool invokerAwaitingAllSettlements)
+	struct SettlementAwaitingInvoker
+	{
+		SettlementAwaitingInvoker(Group &_group)
+		: parentGroup(_group)
+		{}
+
+		bool await_ready(void) { return false; }
+
+		Group &parentGroup;
+	};
+
+	struct AwaitFirstSettlementInvoker
+	:	public SettlementAwaitingInvoker
+	{
+		AwaitFirstSettlementInvoker(Group &_group)
+		:	SettlementAwaitingInvoker(_group),
+		{
+			parentGroup.currentAwaitingCondition = FIRST_SETTLED;
+		}
+
+		bool await_suspend(std::coroutine_handle<> _groupAwaiterSchedHandle)
+		{
+			/* Nothing to do here: maybe we can check again?
+			 * But otherwise, we store away the coro_handle of the
+			 * awaiting caller, and suspend the caller.
+			 */
+			sscl::SpinLock::Guard(parentGroup.s.lock);
+
+			if (parentGroup.s.rsrc.firstInvokerSettled())
+				{ return false; }
+
+			parentGroup.s.rsrc.groupAwaiterSchedHandle =
+				_groupAwaiterSchedHandle;
+
+			parentGroup.s.rsrc.callerHasSetSchedHandle = true;
+			return true;
+		}
+
+		std::pair<
+			SettlementDescriptor &,
+			std::vector<SettlementDescriptor> &>
+		await_resume()
+		{
+			assert(parentGroup.s.rsrc.firstSettledInvokerIdx >= 0);
+
+			return {
+				parentGroup.s.rsrc.settlements[firstSettledInvokerIdx],
+				parentGroup.s.rcrc.settlements
+			}
+		}
+	};
+
+	struct AwaitAllSettlementsInvoker
+	:	public SettlementAwaitingInvoker
+	{
+		AwaitFirstSettlementInvoker(Group &_group)
+		:	SettlementAwaitingInvoker(_group),
+		{
+			parentGroup.currentAwaitingCondition = ALL_SETTLED;
+		}
+
+		bool await_suspend(std::coroutine_handle<> _groupAwaiterSchedHandle)
+		{
+			sscl::SpinLock::Guard(parentGroup.s.lock);
+
+			if (parentGroup.allInvokersSettled())
+				{ return false; }
+
+			parentGroup.s.rsrc.groupAwaiterSchedHandle
+				= _groupAwaiterSchedHandle;
+
+			parentGroup.s.rsrc.callerHasSetSchedHandle = true;
+			return true;
+		}
+
+		std::vector<SettlementDescriptor> &await_resume()
+		{
+			assert(parentGroup.allInvokersSettled());
+			return parentGroup.s.rcrc.settlements;
+		}
+	};
+
+	struct NonAwaitableAdapterCoro
+	{
+		struct promise_type
+		{
+			NonAwaitableAdapterCoro get_return_object() { return {}; }
+			std::suspend_never initial_suspend() { return {}; }
+			std::suspend_never final_suspend() { return {}; }
+			void return_void() { return; }
+			void unhandled_exception()
+			{
+				/**	FIXME:
+				 * We probably want to convey the exception from the co_awaited
+				 * callee invoker along to the group awaiter.
+				 */
+			}
+		};
+
+		operator co_await=delete;
+		bool await_ready() { std::terminate(); return false; }
+		void await_suspend() { std::terminate(); }
+		void await_resume() { std::terminate(); }
+	}
+
+	std::pair<bool, bool>
+	updateSettlementsStateAndAwakenCallerIfConditionMet(
+		std::vector<SettlementDescriptor>::iterator &_settlementIt)
 	{
 		bool isFirstSettlement=false, isLastSettlement=false;
 
-		sscl::SpinLock::Guard(s.lock);
-
-		s.rsrc.nInvokersSettled++;
-
-		if (s.rsrc.firstSettledInvokerIdx < 0)
 		{
-			isFirstSettlement = true;
-			s.rsrc.firstSettledInvokerIdx = std::distance(
-				s.rsrc.settlements.begin(), settlementIt);
+			sscl::SpinLock::Guard(s.lock);
+
+			s.rsrc.nInvokersSettled++;
+
+			if (s.rsrc.firstSettledInvokerIdx < 0)
+			{
+				isFirstSettlement = true;
+				s.rsrc.firstSettledInvokerIdx = std::distance(
+					s.rsrc.settlements.begin(), settlementIt);
+
+				s.rsrc.calleeWasReadyToNotifyOfFirstSettlement = true;
+			}
+
+			if (s.rsrc.nInvokersSettled >= s.settlements.size())
+			{
+				assert(s.rsrc.nInvokersSettled == s.settlements.size());
+				assert(verifyAllInvokersSettled() == true);
+				isLastSettlement = true;
+				s.rsrc.calleeWasReadyToNotifyOfLastSettlement = true;
+			}
+
+			if (!s.rsrc.callerHasSetSchedHandle) { return; }
 		}
 
-		// Check again.
-		if (s.rsrc.nInvokersSettled >= s.settlements.size())
+		if (s.rsrc.currentAwaitingCondition == NONE) { return; }
+
+		if (isFirstSettlement && s.rsrc.currentAwaitingCondition == FIRST_SETTLED
+			|| isLastSettlement && s.rsrc.currentAwaitingCondition == ALL_SETTLED)
 		{
-			assert(s.rsrc.nInvokersSettled == s.settlements.size());
-			assert(verifyAllInvokersSettled() == true);
-			isLastSettlement = true;
+			s.rsrc.groupAwaiterSchedHandle.resume();
 		}
 	}
 
@@ -310,7 +381,7 @@ struct Group
 	 * normally provide, without needing, itself, to be co_awaited.
 	 */
 	template <class SubjectInvokerReturnType>
-	NonViralNonSuspendingInvoker nonAwaitableAdapterCoro(
+	NonAwaitableAdapterCoro nonAwaitableAdapterCoro(
 		std::exception_ptr &exceptionOccured, std::function<void()> cbFn,
 		std::vector<SettlementDescriptor>::iterator &settlementIt,
 		bool awaitingFirstSettlement, bool awaitingAllSettlements)
@@ -323,23 +394,21 @@ struct Group
 		*/
 		settlementDesc.returnValue = co_await settlementIt->invoker;
 		settlementIt->setSettlementStatus();
-		updateSettlementsState(
-			settlementIt,
-			awaitingFirstSettlement, awaitingAllSettlements);
+		updateSettlementsStateAndAwakenCallerIfConditionMet(
+			settlementIt);
 
 		co_return;
 	}
 
 	template <class SubjectInvokerReturnType>
-	NonViralNonSuspendingInvoker nonAwaitableAdapterCoro<void>(
+	NonAwaitableAdapterCoro nonAwaitableAdapterCoro<void>(
 		std::exception_ptr &exceptionOccured, std::function<void()> cbFn,
 		std::vector<SettlementDescriptor>::iterator &settlementIt)
 	{
 		co_await settlementIt->invoker;
 		settlementIt->setSettlementStatus();
-		updateSettlementsState(
-			settlementIt,
-			awaitingFirstSettlement, awaitingAllSettlements);
+		updateSettlementsStateAndAwakenCallerIfConditionMet(
+			settlementIt);
 
 		co_return;
 	}
@@ -358,10 +427,14 @@ struct Group
 	struct State
 	{
 		int firstSettledInvokerIdx=-1, nInvokersSettled=0;
+		std::coroutine_handle<> groupAwaiterSchedHandle;
+		bool callerHasSetSchedHandle=false,
+			calleeWasReadyToNotifyOfFirstSettlement=false,
+			calleeWasReadyToNotifyOfLastSettlement=false;
 		std::vector<SettlementDescriptor> settlements;
 	};
 
-	std::coroutine_handle<> groupAwaiterSchedHandle;
+	AwaitingCondition currentAwaitingCondition=AwaitingCondition::NONE;
 	SharedResourceGroup<sscl::SpinLock, State> s;
 };
 
