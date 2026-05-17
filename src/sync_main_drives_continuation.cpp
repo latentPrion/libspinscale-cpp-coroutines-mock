@@ -112,19 +112,19 @@ int main()
 	 */
 //	std::this_thread::sleep_for(std::chrono::milliseconds(500));
 	std::cout << __func__ << ": " << std::this_thread::get_id() << " About to call initializeCReq.\n";
-	/*BodyNonViralNonSuspendingInvoker invoker =*/
 	std::exception_ptr initializeCReqExceptionPtr = nullptr;
-	initializeCReq(
+	BodyNonViralNonSuspendingInvoker initializeCReqInvoker = initializeCReq(
 		initializeCReqExceptionPtr,
 		[&body_keep_looping, &world_keep_looping, &leg_keep_looping, &keep_looping]()
 	{
 		std::cout << "initializeCReq caller completion: " << std::this_thread::get_id()
-			<< " (callee frame is destroyed after this returns; exceptions were handled before this callback).\n";
+			<< " (callee frame is destroyed when main() exits and ~initializeCReqInvoker runs).\n";
 		finalizeAllThreads(
 			body_keep_looping, world_keep_looping,
 			leg_keep_looping, keep_looping);
 	},
 		4, "KEKW");
+	(void)initializeCReqInvoker;
 	std::cout << __func__ << ": " << std::this_thread::get_id() << " initializeCReq returned.\n";
 
 	for (keep_looping = true; keep_looping;) {

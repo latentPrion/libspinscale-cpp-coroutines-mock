@@ -17,7 +17,25 @@ public:
 	: calleePromise(_calleePromise)
 	{}
 
-	~PostingInvoker() noexcept = default;
+	PostingInvoker(const PostingInvoker &) = delete;
+	PostingInvoker &operator=(const PostingInvoker &) = delete;
+
+	PostingInvoker(PostingInvoker &&other) noexcept
+	: calleePromise(other.calleePromise),
+	ownsFrameDestroy_(std::exchange(other.ownsFrameDestroy_, false))
+	{}
+
+	PostingInvoker &operator=(PostingInvoker &&other) = delete;
+
+	~PostingInvoker() noexcept
+	{
+		if (!ownsFrameDestroy_) { return; }
+
+		std::coroutine_handle<> handle = calleePromise.selfSchedHandle;
+		if (handle) {
+			handle.destroy();
+		}
+	}
 
 	template <typename CallerPromise>
 	bool setCallerSchedHandle(std::coroutine_handle<CallerPromise> callerSchedHandle) noexcept
@@ -33,6 +51,12 @@ public:
 		return calleePromise.postBackStatus.getCallerFlowExecutor()();
 	}
 
+	ReturnValues<T> &completedReturnValues() noexcept
+		{ return calleePromise.returnValues; }
+
+	const ReturnValues<T> &completedReturnValues() const noexcept
+		{ return calleePromise.returnValues; }
+
 	auto await_resume()
 	{
 		calleePromise.postBackStatus.reset();
@@ -40,9 +64,6 @@ public:
 		ReturnValues<T> &returnValues = calleePromise.returnValues;
 		std::cout << __func__ << ": " << std::this_thread::get_id()
 			<< " About to check for and rethrow any exception.\n";
-
-		CalleeCoroutineHandleDestroyer completion(
-			calleePromise.selfSchedHandle);
 
 		if (returnValues.myExceptionPtr)
 		{
@@ -58,6 +79,20 @@ public:
 
 private:
 	PromiseType &calleePromise;
+
+	/**	EXPLANATION:
+	 * Every live invoker owns destruction of its callee coroutine frame in
+	 * ~PostingInvoker (via calleePromise.selfSchedHandle).
+	 *
+	 * The only time frame destruction is skipped is for a moved-from invoker
+	 * after move construction or move assignment, so we do not double-destroy
+	 * the same handle when get_return_object() returns the invoker by value.
+	 *
+	 * This is not an opt-out for viral vs non-viral callers or for "callee
+	 * still running"; callers must keep the invoker alive until the callee
+	 * frame is no longer needed.
+	 */
+	bool ownsFrameDestroy_ = true;
 };
 
 #endif // POSTING_INVOKER_H

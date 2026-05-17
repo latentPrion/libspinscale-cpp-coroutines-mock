@@ -14,6 +14,7 @@ sync_main_drives_continuation_SOURCES = \
 	childThreads.h \
 	coConditionVariable.h \
 	group.h \
+	group_smoke.cpp \
 	invokers.h \
 	postingInvoker.h \
 	promises.h \

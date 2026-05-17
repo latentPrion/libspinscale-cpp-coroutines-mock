@@ -11,6 +11,9 @@
 
 /**	Non-viral coroutine entry that must not be co_awaited: promise is always
  *	PostingPromiseTemplate<void> (no return-value path to a caller).
+ *
+ *	The invoker must outlive the callee frame: do not discard the return object
+ *	from get_return_object(). ~PostingInvoker destroys the callee frame.
  */
 template <template <typename> class PostingPromiseTemplate>
 struct NonViralNonSuspendingInvoker
@@ -68,6 +71,9 @@ struct NonViralNonSuspendingInvoker
 
 /**	Viral awaitable: promise_type inherits PostingPromiseTemplate<T> (posting
  *	target chosen by the posting-promise alias, e.g. BodyPostingPromise<int>).
+ *
+ *	The invoker must outlive the callee frame until results are read.
+ *	~PostingInvoker destroys the callee frame (not await_resume).
  */
 template <template <typename> class PostingPromiseTemplate, typename T>
 struct ViralSuspendingInvoker

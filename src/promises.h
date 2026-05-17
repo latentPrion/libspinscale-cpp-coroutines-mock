@@ -19,43 +19,6 @@
 template <typename PromiseType, typename T>
 class PostingInvoker;
 
-struct CalleeCoroutineHandleDestroyer
-{
-	CalleeCoroutineHandleDestroyer() noexcept = default;
-
-	explicit CalleeCoroutineHandleDestroyer(std::coroutine_handle<> schedHandle) noexcept
-	: selfSchedHandle(schedHandle)
-	{}
-
-	CalleeCoroutineHandleDestroyer(CalleeCoroutineHandleDestroyer &&other) noexcept
-	: selfSchedHandle(std::exchange(other.selfSchedHandle, {}))
-	{}
-
-	CalleeCoroutineHandleDestroyer &operator=(CalleeCoroutineHandleDestroyer &&other) noexcept
-	{
-		if (this != &other) {
-			if (selfSchedHandle) {
-				selfSchedHandle.destroy();
-			}
-			selfSchedHandle = std::exchange(other.selfSchedHandle, {});
-		}
-		return *this;
-	}
-
-	~CalleeCoroutineHandleDestroyer() noexcept
-	{
-		std::cout << __func__ << ": " << std::this_thread::get_id() << " Destroying.\n";
-		if (selfSchedHandle) {
-			selfSchedHandle.destroy();
-		}
-	}
-
-	CalleeCoroutineHandleDestroyer(const CalleeCoroutineHandleDestroyer &) = delete;
-	CalleeCoroutineHandleDestroyer &operator=(const CalleeCoroutineHandleDestroyer &) = delete;
-
-	std::coroutine_handle<> selfSchedHandle;
-};
-
 template <typename T, bool IsVoid = std::is_void_v<T>>
 struct ReturnValueStorage;
 
@@ -262,7 +225,6 @@ struct PostingPromise
 					calleePromise.callerIoContext,
 					[&calleeRef = calleePromise]()
 					{
-						CalleeCoroutineHandleDestroyer completion(calleeRef.selfSchedHandle);
 						if (calleeRef.returnValues.myExceptionPtr) {
 							std::rethrow_exception(calleeRef.returnValues.myExceptionPtr);
 						}

@@ -70,7 +70,7 @@ concept AwaiterIface = detail::AwaiterIface<T>;
 template <typename T>
 concept AwaitableOrAwaiterIface = AwaiterIface<T> || AwaitableIface<T>;
 
-template <typename Invoker, typename SubjectInvokerReturnType>
+template <typename Invoker>
 requires AwaitableOrAwaiterIface<Invoker>
 struct Group
 {
@@ -98,18 +98,14 @@ struct Group
 		{
 			assert(type == TypeE::UNSETTLED);
 
-			if (calleeException)
-			{
+			if (calleeException) {
 				type = TypeE::EXCEPTION_THROWN;
-			}
-			else
-			{
+			} else {
 				type = TypeE::COMPLETED;
 			}
 		}
 
 		TypeE type = TypeE::UNSETTLED;
-		SubjectInvokerReturnType returnValue{};
 		std::exception_ptr calleeException = nullptr;
 		std::exception_ptr adapterException = nullptr;
 		std::reference_wrapper<Invoker> invoker;
@@ -471,12 +467,11 @@ struct Group
 		 * co_awaiter.
 		 */
 		try {
-			if constexpr (std::is_void_v<SubjectInvokerReturnType>) {
-				co_await settlementIt->invoker.get();
-			}
-			else {
-				settlementIt->returnValue = co_await settlementIt->invoker.get();
-			}
+			/* Return values remain in the callee promise until the caller-owned
+			 * invoker is destroyed (~PostingInvoker). The group co_awaiter reads
+			 * results via settlementIt->invoker after awaiting the group.
+			 */
+			co_await settlementIt->invoker.get();
 		}
 		catch (...)
 		{
@@ -493,6 +488,11 @@ struct Group
 		co_return;
 	}
 
+	/**	EXPLANATION:
+	 * Each invoker passed to add() must outlive this Group and the callee frame
+	 * (see ~PostingInvoker). The group co_awaiter reads return values from those
+	 * invokers after awaiting; do not destroy an invoker until reads are done.
+	 */
 	void add(Invoker &invoker)
 	{
 		typename std::vector<SettlementDescriptor>::iterator posIt;
