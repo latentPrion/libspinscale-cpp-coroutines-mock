@@ -7,10 +7,9 @@ template <typename LockType, typename ResourceType>
 class SharedResourceGroup
 {
 public:
-	SharedResourceGroup();
-	~SharedResourceGroup();
+	SharedResourceGroup() = default;
+	~SharedResourceGroup() = default;
 
-private:
 	LockType lock;
 	ResourceType rsrc;
 };

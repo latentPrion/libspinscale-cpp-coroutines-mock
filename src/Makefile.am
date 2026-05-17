@@ -13,7 +13,9 @@ sync_main_drives_continuation_SOURCES = \
 	childThreads.cpp \
 	childThreads.h \
 	coConditionVariable.h \
+	group.h \
 	invokers.h \
 	postingInvoker.h \
 	promises.h \
+	sharedResourceGroup.h \
 	sync_main_drives_continuation.cpp

@@ -275,9 +275,11 @@ sync_main_drives_continuation_SOURCES = \
 	childThreads.cpp \
 	childThreads.h \
 	coConditionVariable.h \
+	group.h \
 	invokers.h \
 	postingInvoker.h \
 	promises.h \
+	sharedResourceGroup.h \
 	sync_main_drives_continuation.cpp
 
 all: all-am
@@ -518,7 +520,8 @@ clean-am: clean-binPROGRAMS clean-generic mostlyclean-am
 
 distclean: distclean-am
 		-rm -f ./$(DEPDIR)/childThreads.Po
-		-rm -f ./$(DEPDIR)/sync_main_drives_continuation.Po
+	-rm -f ./$(DEPDIR)/group_smoke.Po
+	-rm -f ./$(DEPDIR)/sync_main_drives_continuation.Po
 	-rm -f Makefile
 distclean-am: clean-am distclean-compile distclean-generic \
 	distclean-tags
@@ -565,7 +568,8 @@ installcheck-am:
 
 maintainer-clean: maintainer-clean-am
 		-rm -f ./$(DEPDIR)/childThreads.Po
-		-rm -f ./$(DEPDIR)/sync_main_drives_continuation.Po
+	-rm -f ./$(DEPDIR)/group_smoke.Po
+	-rm -f ./$(DEPDIR)/sync_main_drives_continuation.Po
 	-rm -f Makefile
 maintainer-clean-am: distclean-am maintainer-clean-generic
 
