@@ -18,6 +18,7 @@
 #include <boost/asio/post.hpp>
 
 #include "current_io_context.h"
+#include "promiseChainLink.h"
 #include "sharedResourceGroup.h"
 #include "spinlock.h"
 
@@ -138,9 +139,18 @@ struct Group
 
 	bool allInvokersSettled() const
 	{
-		auto nInvokersAdded = s.rsrc.settlements.size();
+		const std::size_t nInvokersAdded = s.rsrc.settlements.size();
 		assert(s.rsrc.nInvokersSettled <= nInvokersAdded);
 		return s.rsrc.nInvokersSettled == nInvokersAdded;
+	}
+
+	/**	Caller must hold s.lock. */
+	void throwIfNoMemberInvokersForCoAwaitUnderLock() const
+	{
+		if (s.rsrc.settlements.empty()) {
+			throw std::runtime_error(
+				"co_await: Group has no member invokers; call add() before awaiting");
+		}
 	}
 
 	struct SettlementAwaitingInvoker
@@ -187,15 +197,24 @@ struct Group
 		Group &parentGroup;
 	};
 
-	/**	CAVEAT:
-	 * If you create an instance of AwaitFirstSettlementInvoker and then
-	 * immediately create an instance of AwaitAllSettlementsInvoker without
-	 * first co_awaiting the AwaitFirstSettlementInvoker, then it is
-	 * illegal to call co_await on the AwaitFirst invoker after the
-	 * AwaitAll invoker has been co_awaited.
+	/**	EXPLANATION:
+	 * AwaitingCondition and the group-awaiter coroutine_handle are set only
+	 * in await_suspend when this co_await actually suspends. Constructing
+	 * several AwaitFirstSettlementInvoker / AwaitAllSettlementsInvoker
+	 * objects without co_awaiting them is harmless.
 	 *
-	 * Always consume (i.e: co_await) the current instantiated invoker
-	 * before instantiating another one.
+	 * You may co_await await-all and later co_await await-first (in either
+	 * construction order). After a suspending wait completes, the adapter
+	 * clears handle state in updateSettlementsStateAndAwakenCallerIfConditionMet,
+	 * so a later co_await on another handle (or a second co_await on the same
+	 * handle, after the first finished) is legal.
+	 *
+	 * Only one group co_await may be suspended with a registered handle at a
+	 * time; a second concurrent co_await trips assert(!callerHasSetSchedHandle)
+	 * in debug builds.
+	 *
+	 * firstSettledInvokerIdx and calleeWasReadyToNotifyOfFirstSettlement are
+	 * sticky for the Group lifetime (first member ever to settle), not per wave.
 	 */
 	struct AwaitFirstSettlementInvoker
 	:	public SettlementAwaitingInvoker
@@ -204,18 +223,15 @@ struct Group
 
 		bool await_suspend(std::coroutine_handle<> groupAwaiterSchedHandle)
 		{
-			/* Each awaiter obj should only be co_awaited once.
-			 * During its await_suspend therefore, it should always
-			 * find that the callerSchedHandle hasn't been set, since
-			 * it is await_suspend that sets that handle.
-			 *
-			 *	TODO: We may be able to allow a single AwaitFirst*Invoker
-			 * to be co_awaited multiple times. If we do that, then this
-			 * assert must be removed.
+			/* No other group co_await may be suspended with a registered handle.
+			 * Sequential co_await on the same object is allowed after the prior
+			 * wait finished and clearCallerSchedHandleState() ran on wake.
 			 */
 			assert(!this->parentGroup.s.rsrc.callerHasSetSchedHandle);
 
 			sscl::SpinLock::Guard guard(this->parentGroup.s.lock);
+
+			this->parentGroup.throwIfNoMemberInvokersForCoAwaitUnderLock();
 
 			if (this->parentGroup.s.rsrc.calleeWasReadyToNotifyOfFirstSettlement) {
 				return false;
@@ -242,21 +258,13 @@ struct Group
 		}
 	};
 
-	/**	CAVEAT:
-	 * If you create an instance of AwaitAllSettlementsInvoker and then
-	 * immediately create an instance of AwaitFirstSettlementInvoker without
-	 * first co_awaiting the AwaitAllSettlementsInvoker, then it is
-	 * illegal to call co_await on the AwaitAll invoker after the
-	 * AwaitFirst invoker has been co_awaited.
+	/**	EXPLANATION:
+	 * Same awaiting rules as AwaitFirstSettlementInvoker (see above).
 	 *
-	 * Always consume (i.e: co_await) the current instantiated invoker
-	 * before instantiating another one.
-	 *
-	 * It's illegal to add() new invokers to the Group while co_awaiting
-	 * an AwaitAllSettlementsInvoker.
-	 * You may add new invokers after co_await returns, though.
-	 *
-	 *
+	 * It is illegal to add() new members while a group co_await is suspended
+	 * (groupAwaiterSchedHandle is registered). You may add() after co_await
+	 * returns, including starting a new settlement wave before the next
+	 * co_await.
 	 */
 	struct AwaitAllSettlementsInvoker
 	:	public SettlementAwaitingInvoker
@@ -265,13 +273,15 @@ struct Group
 
 		bool await_suspend(std::coroutine_handle<> groupAwaiterSchedHandle)
 		{
-			/* Because we clear the groupAwaiterSchedHandle in each
-			 * await_resume(), we should find that groupAwaiterSchedHandle
-			 * is unset everytime we call co_await.
+			/* See AwaitFirstSettlementInvoker::await_suspend. Handle state is
+			 * cleared when the adapter wakes a suspended group co_awaiter, not
+			 * in await_resume.
 			 */
 			assert(!this->parentGroup.s.rsrc.callerHasSetSchedHandle);
 
 			sscl::SpinLock::Guard guard(this->parentGroup.s.lock);
+
+			this->parentGroup.throwIfNoMemberInvokersForCoAwaitUnderLock();
 
 			if (this->parentGroup.allInvokersSettled()) {
 				return false;
@@ -293,9 +303,14 @@ struct Group
 	struct NonAwaitableNonPostingAdapterCoro
 	{
 		struct promise_type
+		:	public PromiseChainLink
 		{
-			NonAwaitableNonPostingAdapterCoro get_return_object()
+			NonAwaitableNonPostingAdapterCoro get_return_object() noexcept
 				{ return {}; }
+
+			void removeAcquiredLock(CoQutex &) noexcept override
+				{}
+
 			std::suspend_never initial_suspend() noexcept { return {}; }
 			/**	EXPLANATION:
 			 * final_suspend must return suspend_never here so that
@@ -321,7 +336,7 @@ struct Group
 			}
 		};
 
-		NonAwaitableNonPostingAdapterCoro() = delete;
+		NonAwaitableNonPostingAdapterCoro() noexcept = default;
 		NonAwaitableNonPostingAdapterCoro operator co_await() const = delete;
 		bool await_ready() const { std::terminate(); return false; }
 		void await_suspend() const { std::terminate(); }
@@ -330,7 +345,7 @@ struct Group
 
 	std::pair<bool, bool>
 	updateSettlementsStateAndAwakenCallerIfConditionMet(
-		typename std::vector<SettlementDescriptor>::iterator settlementIt) noexcept
+		std::size_t settlementIndex) noexcept
 	{
 		bool isFirstSettlement = false;
 		bool isLastSettlement = false;
@@ -344,13 +359,13 @@ struct Group
 			 * calleeWasReadyToNotifyOfLastSettlementForCurrentSet.
 			 */
 			assert(s.rsrc.nInvokersSettled < s.rsrc.settlements.size());
+			assert(settlementIndex < s.rsrc.settlements.size());
 			s.rsrc.nInvokersSettled++;
 
 			if (!firstInvokerSettled())
 			{
 				isFirstSettlement = true;
-				s.rsrc.firstSettledInvokerIdx = static_cast<int>(std::distance(
-					s.rsrc.settlements.begin(), settlementIt));
+				s.rsrc.firstSettledInvokerIdx = static_cast<int>(settlementIndex);
 
 				/* This should be set-once & sticky throughout the lifetime
 				 * of the Group object. The first invoker only gets
@@ -367,15 +382,9 @@ struct Group
 				isLastSettlement = true;
 			}
 
-			/* Each new settlement condition awaiter must reset
-			 * callerHasSetSchedHandle in order to enable that awaiter
-			 * to know whether it was possible for the adapter to awaken
-			 * the group awaiter.
-			 * We currently do this resetting in SettlementAwaitingInvoker's
-			 * ctor.
-			 *
-			 * (Because the adapter can only awaken the group awaiter if
-			 * the group awaiter's coro_handle has been set.)
+			/* If no group co_awaiter registered a handle (did not suspend, or
+			 * already woke and clearCallerSchedHandleState ran), there is
+			 * nothing to post back to.
 			 */
 			if (!s.rsrc.callerHasSetSchedHandle) {
 				return {isFirstSettlement, isLastSettlement};
@@ -458,32 +467,39 @@ struct Group
 	 * normally provide, without needing, itself, to be co_awaited.
 	 */
 	NonAwaitableNonPostingAdapterCoro nonAwaitableAdapterCoro(
-		typename std::vector<SettlementDescriptor>::iterator settlementIt) noexcept
+		std::size_t settlementIndex) noexcept
 	{
 		/**	EXPLANATION:
 		 * It's very convenient that our design for the NonViralNonSuspendingInvoker
 		 * coincidentally allows us to supply a lambda that can be used to test
 		 * for the settlement conditions that are being waited on by the Group's
 		 * co_awaiter.
+		 *
+		 * settlementIndex is captured by value (not a vector iterator) so adapter
+		 * coros remain valid if settlements reallocate during concurrent add().
 		 */
 		try {
 			/* Return values remain in the callee promise until the caller-owned
 			 * invoker is destroyed (~PostingInvoker). The group co_awaiter reads
-			 * results via settlementIt->invoker after awaiting the group.
+			 * results via settlements[settlementIndex].invoker after awaiting.
+			 *
+			 * Index settlements[] each time; do not cache a reference across
+			 * co_await because concurrent add() may reallocate the vector.
 			 */
-			co_await settlementIt->invoker.get();
+			co_await s.rsrc.settlements[settlementIndex].invoker.get();
 		}
 		catch (...)
 		{
-			settlementIt->calleeException = std::current_exception();
+			s.rsrc.settlements[settlementIndex].calleeException =
+				std::current_exception();
 		}
 
 		/* From here onwards, we mustn't throw(). Unhandled exceptions
 		 * generated by the adapter coro itself will result in
 		 * std::terminate().
 		 */
-		settlementIt->setSettlementStatus();
-		updateSettlementsStateAndAwakenCallerIfConditionMet(settlementIt);
+		s.rsrc.settlements[settlementIndex].setSettlementStatus();
+		updateSettlementsStateAndAwakenCallerIfConditionMet(settlementIndex);
 
 		co_return;
 	}
@@ -495,7 +511,7 @@ struct Group
 	 */
 	void add(Invoker &invoker)
 	{
-		typename std::vector<SettlementDescriptor>::iterator posIt;
+		std::size_t settlementIndex = 0;
 
 		{
 			sscl::SpinLock::Guard guard(s.lock);
@@ -507,10 +523,11 @@ struct Group
 					"while co_awaiting a given set");
 			}
 
-			posIt = s.rsrc.settlements.emplace_back(invoker);
+			settlementIndex = s.rsrc.settlements.size();
+			s.rsrc.settlements.emplace_back(invoker);
 		}
 
-		nonAwaitableAdapterCoro(posIt);
+		nonAwaitableAdapterCoro(settlementIndex);
 	}
 
 	void checkForAndReThrowGroupExceptions() const
@@ -562,7 +579,7 @@ struct Group
 		}
 
 		int firstSettledInvokerIdx = -1;
-		int nInvokersSettled = 0;
+		std::size_t nInvokersSettled = 0;
 		std::coroutine_handle<> groupAwaiterSchedHandle = nullptr;
 		bool callerHasSetSchedHandle = false;
 		/* calleWasReady*First* is an indelible record of what

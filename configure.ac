@@ -82,6 +82,16 @@ AC_LINK_IFELSE(
 )
 LIBS="$saved_LIBS"
 
+AC_ARG_ENABLE([lto],
+	[AS_HELP_STRING([--enable-lto],
+		[enable link-time optimization (-flto on compile and link)])],
+	[enable_lto=$enableval],
+	[enable_lto=no])
+if test "x$enable_lto" = xyes; then
+	CXXFLAGS="$CXXFLAGS -flto"
+	LDFLAGS="$LDFLAGS -flto"
+fi
+
 AC_CONFIG_FILES([
 	Makefile
 	src/Makefile
