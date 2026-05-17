@@ -1,0 +1,8 @@
+Hey, it turns out that a big problem will be solved if I just destroy the callee coroutine_handle in the caller awaitable's destructor. I.e: right now I use a special class to destroy the callee promise inside of await_resume. This allows me to say that the awaitable can go out of scope and the callee promise will still be destroyed.
+
+But if I instead constrain myself to always keep an awaitable alive until its promise has finished executing, then I gain the beenfit of knowing that as long as the awaitable is in scope, I can read the resturn value of the coro without worrying that the promise has been destroyed. This will significantly simplify and make uniform my implementation of co::Group. Right now, co::Group has no way to access the result of the callee invoker after the adapter's co_await call returns, because the member callee promise is destroyed in the await_resume portion of the adapter's call to co_await.
+
+Well: if I instead keep the member callee's promise alive until the member invoker goes out of scope, then I can retrieve the return value at nay time from the member invoker itself. This means that my Group impl no longer needs to convey the return value to the Group::settlements array <somehow>. Also, it means that the Group::settlements array can probably be made agnostic of the return types of the invokers that get add()ed to it with some clever type erasure.
+
+Then, the group co_awaiter can access the return values of the invokers it group-awaited by simply accessing them through the member invokers that it itself passed into Group::add(). So it becomes superfluous to add extra storage for the return values within Group::settlements.
+

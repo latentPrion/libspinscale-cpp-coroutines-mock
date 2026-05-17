@@ -154,7 +154,7 @@ struct RuntimePostingPromise : PostingPromise<T>
 
     boost::asio::io_context &initialTargetContext;
 };
-```
+
 
 ### Pros
 
