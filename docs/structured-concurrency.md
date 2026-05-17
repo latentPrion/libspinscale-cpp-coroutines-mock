@@ -176,15 +176,11 @@ struct Group
 		: invoker(std::ref(_invoker))
 		{}
 
-		void setSettlementStatus()
+		void setSettlementStatus() noexcept
 		{
-			if (type != UNSETTLED)
-			{
-				throw std::runtime_error(__func__ + "Member invoker being "
-					"settled twice")
-			}
+			assert(type == UNSETTLED);
 
-			if (exception)
+			if (calleeException)
 			{
 				// ...
 				type = EXCEPTION_THROWN;
@@ -198,7 +194,7 @@ struct Group
 
 		TypeE type = UNSETTLED;
 		SubjectInvokerReturnType returnValue;
-		std::exception_ptr exception;
+		std::exception_ptr calleeException=nullptr, adapterException=nullptr;
 		std::reference_wrapper<AwaitableOrAwaiterIface> invoker;
 	};
 
@@ -235,6 +231,32 @@ struct Group
 		{}
 
 		bool await_ready(void) { return false; }
+
+		/**	EXPLANATION:
+		 * This exists for if we ever need to re-make the adapter coro
+		 * throw exceptions. But we decided to make it noexcept in order
+		 * to avoid this complication.
+		 */
+		void checkForAndReThrowAdapterExceptions(void)
+		{
+			std::string ostr;
+			std::ostringstream ostream(ostr);
+			bool doThrow=false;
+
+			for (auto &item: pgs)
+			{
+				if (!item.adapterException)
+					{ continue; }
+
+				doThrow = true;
+				ostream << "Exc thrown in Group Adapter: "
+					<< item.adapterException.what() << "\n";
+			}
+
+			if (doThrow) {
+				throw std::runtime_exception(ostr);
+			}
+		}
 
 		Group &parentGroup;
 	};
@@ -287,7 +309,6 @@ struct Group
 		await_resume()
 		{
 			assert(firstInvokerSettled());
-
 			return {
 				parentGroup.s.rsrc.settlements[firstSettledInvokerIdx],
 				parentGroup.s.rcrc.settlements
@@ -357,12 +378,21 @@ struct Group
 			 */
 			std::suspend_never final_suspend() { return {}; }
 			void return_void() { return; }
-			void unhandled_exception()
+			void unhandled_exception() noexcept
 			{
-				/**	FIXME:
-				 * We probably want to convey the exception from the co_awaited
-				 * callee invoker along to the group awaiter.
-				 */
+				try {
+					auto eptr = std::current_exception();
+					if (eptr) {
+						std::rethrow_exception(eptr);
+					}
+				} catch (const std::exception& e) {
+					std::cerr << "Unhandled exception in Group adapter coroutine:\n"
+						<< e.what() << "\n";
+				} catch (...) {
+					std::cerr << "Unhandled non-std exception in Group adapter coroutine\n";
+				}
+
+				std::terminate();
 			}
 		};
 
@@ -375,6 +405,7 @@ struct Group
 	std::pair<bool, bool>
 	updateSettlementsStateAndAwakenCallerIfConditionMet(
 		std::vector<SettlementDescriptor>::iterator &_settlementIt)
+		noexcept
 	{
 		bool isFirstSettlement=false, isLastSettlement=false;
 		std::coroutine_handle<> groupAwaiterSchedHandleToWake=nullptr;
@@ -382,17 +413,11 @@ struct Group
 		{
 			sscl::SpinLock::Guard(s.lock);
 
-			/* If we can be certain that settlement condition won't
+			/* If we can be certain that the AllSettled condition won't
 			 * be triggered repeatedly, then we can get rid of
 			 * calleeWasReadyToNotifyOfLastSettlementForCurrentSet.
 			 */
-			if (s.rsrc.nInvokersSettled >= s.rsrc.settlements.size())
-			{
-				throw std::out_of_bounds_exception(
-					__func__ + "Last settlement condition "
-					"for group being triggered twice");
-			}
-
+			assert(s.rsrc.nInvokersSettled < s.rsrc.settlements.size());
 			s.rsrc.nInvokersSettled++;
 
 			if (!firstInvokerSettled())
@@ -434,12 +459,7 @@ struct Group
 			* Therefore currentAwaitingCondition must also have been set,
 			* since currentAwaitingCondition is set in the invokers' ctors.
 			*/
-			if (s.rsrc.currentAwaitingCondition == NONE)
-			{
-				throw(
-					__func__ + "Somehow caller sched handle is set, but "
-					"no settlement condition has been set.");
-			}
+			assert(s.rsrc.currentAwaitingCondition != NONE);
 
 			if (isFirstSettlement && s.rsrc.currentAwaitingCondition == FIRST_SETTLED
 				|| isLastSettlement && s.rsrc.currentAwaitingCondition == ALL_SETTLED)
@@ -462,7 +482,6 @@ struct Group
 			}
 		}
 
-
 		if (groupAwaiterSchedHandleToWake)
 		{
 			/* We should be able to just directly resume() the group awaiter's handle
@@ -482,8 +501,14 @@ struct Group
 			 *
 			 * So we should be able to call resume() directly here without
 			 * post()ing to current_io_context().
+			 *
+			 *	EXPLANATION:
+			 * However, in order to ensure that we keep this adapter coro
+			 * method exception-free, we are forced to post() rather than
+			 * directly calling the handle.
 			 */
-			groupAwaiterSchedHandleToWake.resume();
+			boost::asio::post(
+				current_io_context(), groupAwaiterSchedHandleToWake);
 		}
 	}
 
@@ -502,9 +527,8 @@ struct Group
 	 */
 	template <class SubjectInvokerReturnType>
 	NonAwaitableNonPostingAdapterCoro nonAwaitableAdapterCoro(
-		std::exception_ptr &exceptionOccured, std::function<void()> cbFn,
-		std::vector<SettlementDescriptor>::iterator &settlementIt,
-		bool awaitingFirstSettlement, bool awaitingAllSettlements)
+		std::vector<SettlementDescriptor>::iterator &settlementIt)
+		noexcept
 	{
 		/**	EXPLANATION:
 		* It's very convenient that our design for the NonViralNonSuspendingInvoker
@@ -512,7 +536,18 @@ struct Group
 		* for the settlement conditions that are being waited on by the Group's
 		* co_awaiter.
 		*/
-		settlementDesc.returnValue = co_await settlementIt->invoker;
+		try {
+			settlementDesc.returnValue = co_await settlementIt->invoker;
+		}
+		catch (...)
+		{
+			settlementDesc.calleeException = std::current_exception();
+		}
+
+		/* From here onwards, we mustn't throw(). Unhandled exceptions
+		 * generated by the adapter coro itself will result in
+		 * std::terminate().
+		 */
 		settlementIt->setSettlementStatus();
 		updateSettlementsStateAndAwakenCallerIfConditionMet(
 			settlementIt);
@@ -522,10 +557,21 @@ struct Group
 
 	template <class SubjectInvokerReturnType>
 	NonAwaitableNonPostingAdapterCoro nonAwaitableAdapterCoro<void>(
-		std::exception_ptr &exceptionOccured, std::function<void()> cbFn,
 		std::vector<SettlementDescriptor>::iterator &settlementIt)
+		noexcept
 	{
-		co_await settlementIt->invoker;
+		try {
+			co_await settlementIt->invoker;
+		}
+		catch (...)
+		{
+			settlementDesc.calleeException = std::current_exception();
+		}
+
+		/* From here onwards, we mustn't throw(). Unhandled exceptions
+		 * generated by the adapter coro itself will result in
+		 * std::terminate().
+		 */
 		settlementIt->setSettlementStatus();
 		updateSettlementsStateAndAwakenCallerIfConditionMet(
 			settlementIt);
@@ -552,6 +598,36 @@ struct Group
 
 		nonAwaitableAdapterCoro(
 			posIt->exception, onSettledCb, posIt);
+	}
+
+	void checkForAndReThrowGroupExceptions(void)
+	{
+		std::string ostr;
+		std::ostringstream ostream(ostr);
+		bool doThrow=false;
+
+		for (auto &item: settlements)
+		{
+			if (item.type != EXCEPTION_THROWN)
+				{ continue; }
+
+			assert(item.calleeException);
+
+			doThrow = true;
+			ostream << "Exc thrown in Group Adapter: ";
+			try {
+				std::rethrow_exception(item.calleeException);
+			} catch (const std::exception& e) {
+				ostream << e.what();
+			} catch (...) {
+				ostream << "<unknown exception type>";
+			}
+			ostream << "\n";
+		}
+
+		if (doThrow) {
+			throw std::runtime_error(ostr);
+		}
 	}
 
 	static onSettledCb() {}
