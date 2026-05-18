@@ -1,6 +1,6 @@
 # Project Instructions
 
-- **Build out-of-tree only.** Never run `configure` or `make` from the repository root or from `src/` in a way that writes `Makefile`, `config.status`, `*.o`, or binaries next to sources. Always use a dedicated directory (for example `build/`: `mkdir -p build && cd build && ../configure && make -j"$(nproc)"`). Binaries appear under `build/src/` (see [README.md](README.md)).
+- **Build out-of-tree only.** Never configure or build inside the repository root or `src/` in a way that writes objects or binaries next to sources. Always use a dedicated directory (for example `build/`: `mkdir -p build && cd build && cmake .. && cmake --build . -j"$(nproc)"`). Binaries appear under `build/src/` (see [README.md](README.md)).
 - Always break functions into logical subfunctions. No long-scrolling functions, in any language. This applies to source code, scripts, build scripts, CMake, Makefiles, and similar project files. Preserve this subfunction splitting discipline during refactors.
 - Modularity is non-negotiable. Always group logically related functions together into a module. Preserve modularity during refactors.
 - Reuse or extend existing abstractions instead of duplicating logic wherever possible. Don't repeat yourself. The goal here is to prevent duplication. Not to discourage appropriate logical separation of prior abstractions into new logical abstractions where sensible.

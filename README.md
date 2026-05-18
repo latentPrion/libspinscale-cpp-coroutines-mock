@@ -39,42 +39,42 @@ The intended outcome is coroutine-based code that still behaves like the current
 - Do not modify files inside the referenced `smo` repository from this repo.
 - Use this repo to document, prototype, and reason about migration mechanics first.
 
-## Build Bootstrap (Autotools + C++23)
+## Build (CMake + C++23)
 
-This repository now uses GNU Autotools and defines coroutine theory executables directly in `src`.
+This repository uses CMake. The [`libspinscale`](libspinscale) git submodule is included and built as part of the tree so this repo can serve as a staging area for the joint coroutines + spinscale migration; coroutine theory executables in `src/` still use the local prototype headers under [`src/`](src/) until that migration lands in both repositories.
 
 ### Prerequisites
 
-- `autoconf`
-- `automake`
-- `make`
+- `cmake` (3.16+)
 - A C++ compiler with C++23 coroutine support
-- Boost (`libboost-dev` / distro equivalent) for `boost::asio`
+- Boost (`libboost-dev` / distro equivalent): `system` for the `src/` executables; `log` as well when building the `libspinscale` submodule
 
-### Bootstrap and Build (Out-of-Tree)
+### Submodule and Build (Out-of-Tree)
 
 ```bash
-./bootstrap.sh
+git submodule update --init --recursive
 mkdir -p build
 cd build
-../configure
-make -j"$(nproc)"
+cmake .. -DCMAKE_BUILD_TYPE=Debug
+cmake --build . -j"$(nproc)"
 ```
+
+Optional: `-DENABLE_LTO=ON` for link-time optimization.
 
 ### Run Binaries
 
 ```bash
-./src/awaitable-returnable-to-caller
-./src/get-ret-obj-must-return-awaitable
+./src/group-edge-test
+./src/group-timer-test
 ./src/sync-main-drives-continuation
 ```
 
 ### Add New Theory Executables
 
 1. Add a new source file under `src/`.
-2. Register a new target in `src/Makefile.am` with `bin_PROGRAMS` and `<target>_SOURCES`.
+2. Register a new target in [`src/CMakeLists.txt`](src/CMakeLists.txt) via `add_coroutines_executable(...)`.
 3. Rebuild from your build tree:
 
 ```bash
-make -j"$(nproc)"
+cmake --build . -j"$(nproc)"
 ```

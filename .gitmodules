@@ -1,0 +1,3 @@
+[submodule "libspinscale"]
+	path = libspinscale
+	url = git@gh-as-latentprion:latentprion/libspinscale.git

@@ -1,37 +1,13 @@
-# Autoconf generated
-/autom4te.cache/
-/configure
-/aclocal.m4
-/config.log
-/config.status
-/config.h
-/stamp-h1
-
-# Automake generated
-/Makefile
-/src/Makefile
-Makefile.in
-/src/Makefile.in
-/src/.deps/
-.dirstamp
-
-# Automake auxiliary scripts (copied by automake --add-missing / autoreconf)
-/ar-lib
-/compile
-/depcomp
-/install-sh
-/missing
-/test-driver
-/ylwrap
-/ltmain.sh
-/config.guess
-/config.sub
-
-# Libtool
-.libs/
-
-# Preferred out-of-tree build directory
+# Out-of-tree build directory
 /build/
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+install_manifest.txt
+CTestTestfile.cmake
+_deps/
 
 # Generic native build artifacts
 *.o
@@ -44,12 +20,6 @@ Makefile.in
 *.dll
 *.exe
 *.out
-
-# Automake/libtool intermediate dependency files
-*.Po
-*.Plo
-*.Tpo
-*.d
 
 # Editor/OS noise
 *~
