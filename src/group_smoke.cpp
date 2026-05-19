@@ -1,5 +1,5 @@
 #include "childThreads.h"
-#include "group.h"
+#include <spinscale/co/group.h>
 
 namespace sscl::co::group_smoke {
 

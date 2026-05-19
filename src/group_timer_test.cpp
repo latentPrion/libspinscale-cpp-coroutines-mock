@@ -9,25 +9,15 @@
 #include <unordered_map>
 
 #include <boost/asio/deadline_timer.hpp>
-#include <boost/asio/io_context.hpp>
+#include <boost/asio/io_service.hpp>
 #include <boost/asio/error.hpp>
 #include <boost/date_time/posix_time/posix_time_types.hpp>
 #include <boost/system/error_code.hpp>
+#include <spinscale/co/group.h>
+#include <spinscale/co/invokers.h>
+#include <spinscale/co/promises.h>
 
-#include "current_io_context.h"
-#include "group.h"
-#include "invokers.h"
-#include "promises.h"
-
-thread_local boost::asio::io_context *tls_current_io_context = nullptr;
-
-boost::asio::io_context &current_io_context()
-{
-	if (!tls_current_io_context) {
-		throw std::runtime_error("TLS io_context is not set");
-	}
-	return *tls_current_io_context;
-}
+#include "coroutinesTestLanes.h"
 
 namespace sscl::co::group_timer_test {
 
@@ -40,12 +30,10 @@ constexpr int timerDelayLongMs = 500;
 constexpr int awaitAllTimingSlackMs = 25;
 constexpr int awaitAllLongCancelTimingMarginMs = 50;
 
-boost::asio::io_context groupTimerTestIoContext;
-
 struct GroupTimerTestThreadTag
 {
-	static boost::asio::io_context &io_context() noexcept
-		{ return groupTimerTestIoContext; }
+	static boost::asio::io_service &io_service() noexcept
+		{ return coroutines::test::testPuppeteerLaneIoService(); }
 };
 
 template <typename T>
@@ -104,7 +92,7 @@ struct TimerAsyncWaitAwaiter
 		timer->async_wait([this](const boost::system::error_code &errorCode) {
 			completionErrorCode = errorCode;
 			waitCompleted = true;
-			if (resumeHandle) {
+			if (resumeHandle && !resumeHandle.done()) {
 				resumeHandle.resume();
 			}
 		});
@@ -131,7 +119,7 @@ struct TimerAsyncWaitAwaiter
 struct RegisteredTimerAsyncWaitAwaiter
 {
 	RegisteredTimerAsyncWaitAwaiter(
-		boost::asio::io_context &ioContext,
+		boost::asio::io_service &ioContext,
 		int delayMilliseconds,
 		int registrationLabelMilliseconds)
 	: timer(std::make_shared<boost::asio::deadline_timer>(ioContext))
@@ -157,7 +145,7 @@ GroupTimerTestViralInvoker<int> waitDeadlineTimer(int timerLabelMilliseconds)
 {
 	const boost::system::error_code waitError = co_await TimerAsyncWaitAwaiter{
 		timerLabelMilliseconds,
-		std::make_shared<boost::asio::deadline_timer>(groupTimerTestIoContext)};
+		std::make_shared<boost::asio::deadline_timer>(coroutines::test::testPuppeteerLaneIoService())};
 
 	if (waitError) {
 		throw std::runtime_error(
@@ -171,7 +159,7 @@ GroupTimerTestViralInvoker<int> waitCancelableDeadlineTimer(
 	int timerLabelMilliseconds)
 {
 	const boost::system::error_code waitError = co_await RegisteredTimerAsyncWaitAwaiter{
-		groupTimerTestIoContext,
+		coroutines::test::testPuppeteerLaneIoService(),
 		timerLabelMilliseconds,
 		timerLabelMilliseconds};
 
@@ -221,7 +209,7 @@ void finishDriverCoroutine(GroupTimerTestViralInvoker<int> &driver)
 
 void runDriverCoroutine(GroupTimerTestViralInvoker<int> &driver)
 {
-	groupTimerTestIoContext.run();
+	coroutines::test::drainTestPuppeteerLaneIoService();
 	finishDriverCoroutine(driver);
 }
 
@@ -410,7 +398,7 @@ void runNamedTimerTest(const NamedTimerTest &namedTimerTest)
 	runDriverCoroutine(driver);
 
 	logPass(namedTimerTest.name);
-	groupTimerTestIoContext.restart();
+	coroutines::test::testPuppeteerLaneIoService().reset();
 }
 
 void runAllTimerTests()
@@ -433,20 +421,23 @@ int main()
 {
 	using namespace sscl::co::group_timer_test;
 
-	tls_current_io_context = &groupTimerTestIoContext;
+	int exitStatus = EXIT_SUCCESS;
 
 	try {
-		runAllTimerTests();
+		coroutines::test::runOnTestPuppeteerLane([] {
+			runAllTimerTests();
+		});
 		std::cout << "group_timer_test: all tests passed\n";
-		return EXIT_SUCCESS;
 	}
 	catch (const std::exception &exception) {
 		std::cerr << "group_timer_test: FAIL: "
 			<< exception.what() << "\n";
-		return EXIT_FAILURE;
+		exitStatus = EXIT_FAILURE;
 	}
 	catch (...) {
 		std::cerr << "group_timer_test: FAIL: unknown exception\n";
-		return EXIT_FAILURE;
+		exitStatus = EXIT_FAILURE;
 	}
+
+	return exitStatus;
 }

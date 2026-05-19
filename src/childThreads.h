@@ -1,58 +1,88 @@
 #ifndef CHILD_THREADS_H
 #define CHILD_THREADS_H
 
-#include <boost/asio/io_context.hpp>
+#include <memory>
 
-#include "invokers.h"
-#include "promises.h"
+#include <boost/asio/io_service.hpp>
+#include <spinscale/componentThread.h>
+#include <spinscale/co/invokers.h>
+#include <spinscale/co/promises.h>
 
-extern thread_local boost::asio::io_context *tls_current_io_context;
+extern std::shared_ptr<sscl::PuppeteerThread> mainPuppeteerLane;
+extern std::shared_ptr<sscl::PuppetThread> bodyPuppetLane;
+extern std::shared_ptr<sscl::PuppetThread> worldPuppetLane;
+extern std::shared_ptr<sscl::PuppetThread> legPuppetLane;
 
-extern boost::asio::io_context mainIoContext;
+struct MainPuppeteerThreadTag
+{
+	static boost::asio::io_service &io_service() noexcept
+		{ return mainPuppeteerLane->getIoService(); }
+};
+template <typename T>
+using MainPuppeteerJoltCReqPostingPromise =
+	sscl::PuppetThreadCReqPostingPromise<T, true, MainPuppeteerThreadTag>;
+using MainPuppeteerJoltThreadCReqInvokerFor =
+	sscl::JoltThreadCReqInvokerFor<MainPuppeteerThreadTag>;
 
-/* Body thread */
-extern boost::asio::io_context bodyIoContext;
 struct BodyThreadTag
 {
-	static boost::asio::io_context &io_context() noexcept
-		{ return bodyIoContext; }
+	static boost::asio::io_service &io_service() noexcept
+		{ return bodyPuppetLane->getIoService(); }
 };
 template <typename T>
-using BodyPostingPromise = TaggedPostingPromise<T, BodyThreadTag>;
-using BodyNonViralNonSuspendingInvoker = NonViralNonSuspendingInvoker<BodyPostingPromise>;
+using BodyPostingPromise = sscl::co::TaggedPostingPromise<T, BodyThreadTag>;
+using BodyNonViralNonSuspendingInvoker =
+	sscl::co::NonViralNonSuspendingInvoker<BodyPostingPromise>;
 template <typename T>
-using BodyViralInvoker = ViralSuspendingInvoker<BodyPostingPromise, T>;
+using BodyViralInvoker = sscl::co::ViralSuspendingInvoker<BodyPostingPromise, T>;
+template <typename T>
+using BodyPuppetThreadCReqPostingPromise =
+	sscl::PuppetThreadCReqPostingPromise<T, false, BodyThreadTag>;
+using BodyStartThreadCReqInvokerFor =
+	sscl::StartThreadCReqInvokerFor<BodyThreadTag>;
+using BodyPauseThreadCReqInvokerFor =
+	sscl::PauseThreadCReqInvokerFor<BodyThreadTag>;
 
-/* World thread */
-extern boost::asio::io_context worldIoContext;
 struct WorldThreadTag
 {
-	static boost::asio::io_context &io_context() noexcept
-		{ return worldIoContext; }
+	static boost::asio::io_service &io_service() noexcept
+		{ return worldPuppetLane->getIoService(); }
 };
 template <typename T>
-using WorldPostingPromise = TaggedPostingPromise<T, WorldThreadTag>;
-using WorldNonViralNonSuspendingInvoker = NonViralNonSuspendingInvoker<WorldPostingPromise>;
+using WorldPostingPromise = sscl::co::TaggedPostingPromise<T, WorldThreadTag>;
+using WorldNonViralNonSuspendingInvoker =
+	sscl::co::NonViralNonSuspendingInvoker<WorldPostingPromise>;
 template <typename T>
-using WorldViralInvoker = ViralSuspendingInvoker<WorldPostingPromise, T>;
+using WorldViralInvoker = sscl::co::ViralSuspendingInvoker<WorldPostingPromise, T>;
+template <typename T>
+using WorldPuppetThreadCReqPostingPromise =
+	sscl::PuppetThreadCReqPostingPromise<T, false, WorldThreadTag>;
+using WorldStartThreadCReqInvokerFor =
+	sscl::StartThreadCReqInvokerFor<WorldThreadTag>;
+using WorldPauseThreadCReqInvokerFor =
+	sscl::PauseThreadCReqInvokerFor<WorldThreadTag>;
 
-/* Leg thread */
-extern boost::asio::io_context legIoContext;
 struct LegThreadTag
 {
-	static boost::asio::io_context &io_context() noexcept
-		{ return legIoContext; }
+	static boost::asio::io_service &io_service() noexcept
+		{ return legPuppetLane->getIoService(); }
 };
 template <typename T>
-using LegPostingPromise = TaggedPostingPromise<T, LegThreadTag>;
-using LegNonViralNonSuspendingInvoker = NonViralNonSuspendingInvoker<LegPostingPromise>;
+using LegPostingPromise = sscl::co::TaggedPostingPromise<T, LegThreadTag>;
+using LegNonViralNonSuspendingInvoker =
+	sscl::co::NonViralNonSuspendingInvoker<LegPostingPromise>;
 template <typename T>
-using LegViralInvoker = ViralSuspendingInvoker<LegPostingPromise, T>;
+using LegViralInvoker = sscl::co::ViralSuspendingInvoker<LegPostingPromise, T>;
+template <typename T>
+using LegPuppetThreadCReqPostingPromise =
+	sscl::PuppetThreadCReqPostingPromise<T, false, LegThreadTag>;
+using LegStartThreadCReqInvokerFor =
+	sscl::StartThreadCReqInvokerFor<LegThreadTag>;
+using LegPauseThreadCReqInvokerFor =
+	sscl::PauseThreadCReqInvokerFor<LegThreadTag>;
 
-void bodyThreadEntry(bool &body_keep_looping);
+void startSyncMainPuppetLanes();
 
-void worldThreadEntry(bool &world_keep_looping);
-
-void legThreadEntry(bool &leg_keep_looping);
+void joinSyncMainPuppetLanes();
 
 #endif // CHILD_THREADS_H
