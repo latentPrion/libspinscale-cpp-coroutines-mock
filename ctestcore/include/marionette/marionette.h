@@ -9,7 +9,7 @@
 
 #include <componentThread.h>
 #include <spinscale/co/invokers.h>
-#include <spinscale/co/promises.h>
+#include <spinscale/co/postingPromise.h>
 #include <spinscale/component.h>
 
 namespace sscl {

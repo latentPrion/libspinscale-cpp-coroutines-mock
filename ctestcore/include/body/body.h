@@ -6,7 +6,7 @@
 
 #include <harnessComponent.h>
 #include <spinscale/co/invokers.h>
-#include <spinscale/co/promises.h>
+#include <spinscale/co/postingPromise.h>
 
 namespace ctest {
 namespace body {

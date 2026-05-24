@@ -18,7 +18,7 @@
 #include <test/marionetteTestRunner.h>
 #include <spinscale/co/group.h>
 #include <spinscale/co/invokers.h>
-#include <spinscale/co/promises.h>
+#include <spinscale/co/postingPromise.h>
 
 namespace sscl::co::group_timer_test {
 
