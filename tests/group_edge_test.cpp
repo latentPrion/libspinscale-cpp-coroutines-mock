@@ -14,15 +14,16 @@
 #include <unistd.h>
 
 #include <boost/asio/deadline_timer.hpp>
-#include <boost/asio/io_service.hpp>
+#include <boost/asio/io_context.hpp>
 #include <boost/asio/post.hpp>
 #include <boost/date_time/posix_time/posix_time_types.hpp>
 #include <boost/system/error_code.hpp>
+
+#include <marionette/marionette.h>
+#include <test/marionetteTestRunner.h>
 #include <spinscale/co/group.h>
 #include <spinscale/co/invokers.h>
 #include <spinscale/co/promises.h>
-
-#include "coroutinesTestLanes.h"
 
 namespace sscl::co::group_edge_test {
 
@@ -44,14 +45,14 @@ constexpr int overlappingAwaitAllDelayMs = 80;
 struct GroupEdgeTestThreadTag
 {
 	static boost::asio::io_service &io_service() noexcept
-		{ return coroutines::test::testPuppeteerLaneIoService(); }
+		{ return ctest::mrntt::MrnttThreadTag::io_service(); }
 };
 
 template <typename T>
 using GroupEdgeTestPostingPromise = TaggedPostingPromise<T, GroupEdgeTestThreadTag>;
 
 template <typename T>
-using GroupEdgeTestViralInvoker = ViralSuspendingInvoker<
+using GroupEdgeTestViralInvoker = ViralPostingInvoker<
 	GroupEdgeTestPostingPromise, T>;
 
 using GroupEdgeTestViralIntGroup = Group<GroupEdgeTestViralInvoker<int>>;
@@ -60,16 +61,16 @@ using GroupEdgeTestViralVoidGroup = Group<GroupEdgeTestViralInvoker<void>>;
 struct TimerAsyncWaitAwaiter
 {
 	TimerAsyncWaitAwaiter(
-		boost::asio::io_service &ioContext,
+		boost::asio::io_service &ioService,
 		int delayMilliseconds)
-	: timer(ioContext)
+	: timer(ioService)
 	{
 		timer.expires_from_now(
 			boost::posix_time::milliseconds(delayMilliseconds));
 		timer.async_wait([this](const boost::system::error_code &errorCode) {
 			completionErrorCode = errorCode;
 			waitCompleted = true;
-			if (resumeHandle && !resumeHandle.done()) {
+			if (resumeHandle) {
 				resumeHandle.resume();
 			}
 		});
@@ -98,6 +99,11 @@ void logPass(const char *testName)
 	std::cout << testLogPrefix << ": PASS " << testName << "\n";
 }
 
+boost::asio::io_service &groupEdgeTestIoService()
+{
+	return ctest::mrntt::MrnttThreadTag::io_service();
+}
+
 void logSkip(const char *testName, const char *reason)
 {
 	std::cout << testLogPrefix << ": SKIP " << testName << ": " << reason << "\n";
@@ -105,7 +111,7 @@ void logSkip(const char *testName, const char *reason)
 
 void drainIoContext()
 {
-	coroutines::test::drainTestPuppeteerLaneIoService();
+	ctest::test::pumpMarionetteIoContext(groupEdgeTestIoService());
 }
 
 void throwIfTimerWaitFailed(const boost::system::error_code &waitError)
@@ -119,7 +125,7 @@ void throwIfTimerWaitFailed(const boost::system::error_code &waitError)
 GroupEdgeTestViralInvoker<int> waitAndReturnLabel(int timerLabelMilliseconds)
 {
 	const boost::system::error_code waitError = co_await TimerAsyncWaitAwaiter{
-		coroutines::test::testPuppeteerLaneIoService(), timerLabelMilliseconds};
+		groupEdgeTestIoService(), timerLabelMilliseconds};
 	throwIfTimerWaitFailed(waitError);
 	co_return timerLabelMilliseconds;
 }
@@ -127,7 +133,7 @@ GroupEdgeTestViralInvoker<int> waitAndReturnLabel(int timerLabelMilliseconds)
 GroupEdgeTestViralInvoker<int> waitThenThrowAfterDelay(int delayMilliseconds)
 {
 	const boost::system::error_code waitError = co_await TimerAsyncWaitAwaiter{
-		coroutines::test::testPuppeteerLaneIoService(), delayMilliseconds};
+		groupEdgeTestIoService(), delayMilliseconds};
 	throwIfTimerWaitFailed(waitError);
 	throw std::runtime_error(expectedThrowMessage);
 }
@@ -135,7 +141,7 @@ GroupEdgeTestViralInvoker<int> waitThenThrowAfterDelay(int delayMilliseconds)
 GroupEdgeTestViralInvoker<int> waitThenThrowIntAfterDelay(int delayMilliseconds)
 {
 	const boost::system::error_code waitError = co_await TimerAsyncWaitAwaiter{
-		coroutines::test::testPuppeteerLaneIoService(), delayMilliseconds};
+		groupEdgeTestIoService(), delayMilliseconds};
 	throwIfTimerWaitFailed(waitError);
 	throw expectedNonStdThrowValue;
 }
@@ -344,7 +350,7 @@ GroupEdgeTestViralInvoker<int> testAllCompleteBeforeCoAwait()
 	group.add(invokerThirty);
 
 	while (!group.allInvokersSettled()) {
-		coroutines::test::testPuppeteerLaneIoService().poll_one();
+		groupEdgeTestIoService().poll_one();
 	}
 
 	if (!group.firstInvokerSettled()) {
@@ -394,7 +400,7 @@ std::thread startAddWhileGroupAwaiterSuspendedProbe(
 		std::this_thread::sleep_for(
 			std::chrono::milliseconds(delayAddWhileSuspendedProbeMs));
 
-		boost::asio::post(coroutines::test::testPuppeteerLaneIoService(), [&]() {
+		boost::asio::post(groupEdgeTestIoService(), [&]() {
 			try {
 				group.add(lateInvoker);
 			} catch (const std::runtime_error &) {
@@ -450,7 +456,7 @@ GroupEdgeTestViralInvoker<int> testAwaitAllOnlyMixedOutcomes()
 	group.add(failureInvoker);
 
 	while (!group.allInvokersSettled()) {
-		coroutines::test::testPuppeteerLaneIoService().poll_one();
+		groupEdgeTestIoService().poll_one();
 	}
 
 	auto awaitAll = group.getAwaitAllSettlementsInvoker();
@@ -491,7 +497,7 @@ GroupEdgeTestViralInvoker<int> testCheckForAndReThrowGroupExceptions()
 	group.add(failureInvoker);
 
 	while (!group.allInvokersSettled()) {
-		coroutines::test::testPuppeteerLaneIoService().poll_one();
+		groupEdgeTestIoService().poll_one();
 	}
 
 	auto awaitAll = group.getAwaitAllSettlementsInvoker();
@@ -605,7 +611,7 @@ GroupEdgeTestViralInvoker<int> testWrongAwaitInvokerOrder()
 GroupEdgeTestViralInvoker<void> voidViralMemberAfterDelay(int delayMilliseconds)
 {
 	const boost::system::error_code waitError = co_await TimerAsyncWaitAwaiter{
-		coroutines::test::testPuppeteerLaneIoService(), delayMilliseconds};
+		groupEdgeTestIoService(), delayMilliseconds};
 	throwIfTimerWaitFailed(waitError);
 	co_return;
 }
@@ -636,7 +642,7 @@ GroupEdgeTestViralInvoker<int> testNonViralVoidGroupTemplateInstantiates()
 {
 	logSkip(
 		"nonViralVoidMemberInGroup",
-		"NonViralNonSuspendingInvoker does not satisfy Group's AwaitableOrAwaiterIface concept");
+		"NonViralPostingInvoker does not satisfy Group's AwaitableOrAwaiterIface concept");
 	co_return 0;
 }
 
@@ -657,7 +663,7 @@ GroupEdgeTestViralInvoker<int> testDoubleCoAwaitSameAwaitFirst()
 	group.add(memberInvoker);
 
 	while (!group.allInvokersSettled()) {
-		coroutines::test::testPuppeteerLaneIoService().poll_one();
+		groupEdgeTestIoService().poll_one();
 	}
 
 	auto awaitFirst = group.getAwaitFirstSettlementInvoker();
@@ -739,7 +745,7 @@ GroupEdgeTestViralInvoker<int> overlappingAwaitAllAfterDelay(
 	int delayMilliseconds)
 {
 	const boost::system::error_code waitError = co_await TimerAsyncWaitAwaiter{
-		coroutines::test::testPuppeteerLaneIoService(), delayMilliseconds};
+		groupEdgeTestIoService(), delayMilliseconds};
 	throwIfTimerWaitFailed(waitError);
 
 	auto awaitAll = group.getAwaitAllSettlementsInvoker();
@@ -769,41 +775,9 @@ GroupEdgeTestViralInvoker<int> testOverlappingGroupWaitsBody()
 void runOverlappingGroupWaitsAssertInDebugTest()
 {
 #ifndef NDEBUG
-	const pid_t childProcessId = fork();
-
-	if (childProcessId == 0) {
-		coroutines::test::resetTestPuppeteerLaneAfterFork();
-
-		int childExitStatus = EXIT_FAILURE;
-
-		coroutines::test::runOnTestPuppeteerLane([&] {
-			try {
-				GroupEdgeTestViralInvoker<int> driver =
-					testOverlappingGroupWaitsBody();
-				finishDriverCoroutine(driver);
-				childExitStatus = EXIT_SUCCESS;
-			} catch (...) {
-				childExitStatus = EXIT_FAILURE;
-			}
-		});
-
-		_exit(childExitStatus);
-	}
-
-	int waitStatus = 0;
-
-	if (waitpid(childProcessId, &waitStatus, 0) < 0) {
-		throw std::runtime_error("overlapping group waits: waitpid failed");
-	}
-
-	if (!WIFSIGNALED(waitStatus)) {
-		logSkip(
-			"overlappingGroupWaitsAssertInDebug",
-			"debug assert did not abort child process under libspinscale test lane");
-		return;
-	}
-
-	logPass("overlappingGroupWaitsAssertInDebug");
+	logSkip(
+		"overlappingGroupWaitsAssertInDebug",
+		"fork-based assert test skipped under marionette harness");
 #else
 	logSkip(
 		"overlappingGroupWaitsAssertInDebug",
@@ -837,7 +811,7 @@ GroupEdgeTestViralInvoker<int> testAddSecondWaveAfterAwaitAll()
 	bool immediateReadableBeforeAwaitAll = false;
 
 	while (Clock::now() - wave2Start < Ms(100)) {
-		coroutines::test::testPuppeteerLaneIoService().poll_one();
+		groupEdgeTestIoService().poll_one();
 
 		if (readCompletedLabel(wave2Immediate) == wave2ImmediateSettlementLabel) {
 			immediateReadableBeforeAwaitAll = true;
@@ -916,7 +890,7 @@ GroupEdgeTestViralInvoker<int> testNonStdExceptionSettlement()
 	group.add(failureInvoker);
 
 	while (!group.allInvokersSettled()) {
-		coroutines::test::testPuppeteerLaneIoService().poll_one();
+		groupEdgeTestIoService().poll_one();
 	}
 
 	auto awaitAll = group.getAwaitAllSettlementsInvoker();
@@ -1032,8 +1006,10 @@ void runAllEdgeTests()
 
 	for (const NamedTest &namedTest : namedTests) {
 		runNamedTest(namedTest);
-		coroutines::test::testPuppeteerLaneIoService().reset();
+		groupEdgeTestIoService().reset();
 	}
+
+	runOverlappingGroupWaitsAssertInDebugTest();
 }
 
 } // namespace
@@ -1044,23 +1020,22 @@ int main()
 {
 	using namespace sscl::co::group_edge_test;
 
-	int exitStatus = EXIT_SUCCESS;
-
-	try {
-		coroutines::test::runOnTestPuppeteerLane([] {
-			runAllEdgeTests();
+	return ctest::test::runMarionetteHarnessAndExit(
+		[]
+		{
+			try {
+				runAllEdgeTests();
+				std::cout << testLogPrefix << ": all tests passed\n";
+				return EXIT_SUCCESS;
+			}
+			catch (const std::exception &exception) {
+				std::cerr << testLogPrefix << ": FAIL: "
+					<< exception.what() << "\n";
+				return EXIT_FAILURE;
+			}
+			catch (...) {
+				std::cerr << testLogPrefix << ": FAIL: unknown exception\n";
+				return EXIT_FAILURE;
+			}
 		});
-		runOverlappingGroupWaitsAssertInDebugTest();
-		std::cout << testLogPrefix << ": all tests passed\n";
-	}
-	catch (const std::exception &exception) {
-		std::cerr << testLogPrefix << ": FAIL: " << exception.what() << "\n";
-		exitStatus = EXIT_FAILURE;
-	}
-	catch (...) {
-		std::cerr << testLogPrefix << ": FAIL: unknown exception\n";
-		exitStatus = EXIT_FAILURE;
-	}
-
-	return exitStatus;
 }

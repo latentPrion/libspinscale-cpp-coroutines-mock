@@ -61,4 +61,8 @@ if(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
 endif()
 
 add_subdirectory(libspinscale)
-add_subdirectory(src)
+
+find_package(Boost REQUIRED COMPONENTS system)
+find_package(Threads REQUIRED)
+
+add_subdirectory(ctestcore)

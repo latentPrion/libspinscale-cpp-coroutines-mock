@@ -173,7 +173,7 @@ The idea is:
 struct PostingPromise
 {
 	/* Posting promise should still enforce that a callerLambda
-	 * is supplied by NonViralNonSuspendingInvokers.
+	 * is supplied by NonViralPostingInvokers.
 	 */
 	struct FinalSuspendPostingInvoker
 	{

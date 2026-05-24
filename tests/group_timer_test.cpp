@@ -9,15 +9,16 @@
 #include <unordered_map>
 
 #include <boost/asio/deadline_timer.hpp>
-#include <boost/asio/io_service.hpp>
+#include <boost/asio/io_context.hpp>
 #include <boost/asio/error.hpp>
 #include <boost/date_time/posix_time/posix_time_types.hpp>
 #include <boost/system/error_code.hpp>
+
+#include <marionette/marionette.h>
+#include <test/marionetteTestRunner.h>
 #include <spinscale/co/group.h>
 #include <spinscale/co/invokers.h>
 #include <spinscale/co/promises.h>
-
-#include "coroutinesTestLanes.h"
 
 namespace sscl::co::group_timer_test {
 
@@ -30,17 +31,22 @@ constexpr int timerDelayLongMs = 500;
 constexpr int awaitAllTimingSlackMs = 25;
 constexpr int awaitAllLongCancelTimingMarginMs = 50;
 
+boost::asio::io_service &groupTimerTestIoService()
+{
+	return ctest::mrntt::MrnttThreadTag::io_service();
+}
+
 struct GroupTimerTestThreadTag
 {
 	static boost::asio::io_service &io_service() noexcept
-		{ return coroutines::test::testPuppeteerLaneIoService(); }
+		{ return groupTimerTestIoService(); }
 };
 
 template <typename T>
 using GroupTimerTestPostingPromise = TaggedPostingPromise<T, GroupTimerTestThreadTag>;
 
 template <typename T>
-using GroupTimerTestViralInvoker = ViralSuspendingInvoker<
+using GroupTimerTestViralInvoker = ViralPostingInvoker<
 	GroupTimerTestPostingPromise, T>;
 
 using GroupTimerTestIntGroup = Group<GroupTimerTestViralInvoker<int>>;
@@ -92,7 +98,7 @@ struct TimerAsyncWaitAwaiter
 		timer->async_wait([this](const boost::system::error_code &errorCode) {
 			completionErrorCode = errorCode;
 			waitCompleted = true;
-			if (resumeHandle && !resumeHandle.done()) {
+			if (resumeHandle) {
 				resumeHandle.resume();
 			}
 		});
@@ -119,7 +125,7 @@ struct TimerAsyncWaitAwaiter
 struct RegisteredTimerAsyncWaitAwaiter
 {
 	RegisteredTimerAsyncWaitAwaiter(
-		boost::asio::io_service &ioContext,
+		boost::asio::io_context &ioContext,
 		int delayMilliseconds,
 		int registrationLabelMilliseconds)
 	: timer(std::make_shared<boost::asio::deadline_timer>(ioContext))
@@ -145,7 +151,7 @@ GroupTimerTestViralInvoker<int> waitDeadlineTimer(int timerLabelMilliseconds)
 {
 	const boost::system::error_code waitError = co_await TimerAsyncWaitAwaiter{
 		timerLabelMilliseconds,
-		std::make_shared<boost::asio::deadline_timer>(coroutines::test::testPuppeteerLaneIoService())};
+		std::make_shared<boost::asio::deadline_timer>(groupTimerTestIoService())};
 
 	if (waitError) {
 		throw std::runtime_error(
@@ -159,7 +165,7 @@ GroupTimerTestViralInvoker<int> waitCancelableDeadlineTimer(
 	int timerLabelMilliseconds)
 {
 	const boost::system::error_code waitError = co_await RegisteredTimerAsyncWaitAwaiter{
-		coroutines::test::testPuppeteerLaneIoService(),
+		groupTimerTestIoService(),
 		timerLabelMilliseconds,
 		timerLabelMilliseconds};
 
@@ -209,7 +215,7 @@ void finishDriverCoroutine(GroupTimerTestViralInvoker<int> &driver)
 
 void runDriverCoroutine(GroupTimerTestViralInvoker<int> &driver)
 {
-	coroutines::test::drainTestPuppeteerLaneIoService();
+	ctest::test::pumpMarionetteIoContext(groupTimerTestIoService());
 	finishDriverCoroutine(driver);
 }
 
@@ -398,7 +404,7 @@ void runNamedTimerTest(const NamedTimerTest &namedTimerTest)
 	runDriverCoroutine(driver);
 
 	logPass(namedTimerTest.name);
-	coroutines::test::testPuppeteerLaneIoService().reset();
+	groupTimerTestIoService().reset();
 }
 
 void runAllTimerTests()
@@ -421,23 +427,22 @@ int main()
 {
 	using namespace sscl::co::group_timer_test;
 
-	int exitStatus = EXIT_SUCCESS;
-
-	try {
-		coroutines::test::runOnTestPuppeteerLane([] {
-			runAllTimerTests();
+	return ctest::test::runMarionetteHarnessAndExit(
+		[]
+		{
+			try {
+				runAllTimerTests();
+				std::cout << "group_timer_test: all tests passed\n";
+				return EXIT_SUCCESS;
+			}
+			catch (const std::exception &exception) {
+				std::cerr << "group_timer_test: FAIL: "
+					<< exception.what() << "\n";
+				return EXIT_FAILURE;
+			}
+			catch (...) {
+				std::cerr << "group_timer_test: FAIL: unknown exception\n";
+				return EXIT_FAILURE;
+			}
 		});
-		std::cout << "group_timer_test: all tests passed\n";
-	}
-	catch (const std::exception &exception) {
-		std::cerr << "group_timer_test: FAIL: "
-			<< exception.what() << "\n";
-		exitStatus = EXIT_FAILURE;
-	}
-	catch (...) {
-		std::cerr << "group_timer_test: FAIL: unknown exception\n";
-		exitStatus = EXIT_FAILURE;
-	}
-
-	return exitStatus;
 }

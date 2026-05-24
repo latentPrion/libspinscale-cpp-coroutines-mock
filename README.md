@@ -39,15 +39,66 @@ The intended outcome is coroutine-based code that still behaves like the current
 - Do not modify files inside the referenced `smo` repository from this repo.
 - Use this repo to document, prototype, and reason about migration mechanics first.
 
+## Application layout (salmanoff paradigm)
+
+This repo now mirrors salmanoff's bootstrap layering, adapted to a test app with four
+named component threads (MRNTT, body, world, leg):
+
+```
+coroutines/
+  main.cpp                 # CRT JOLT + join marionette
+  ctestcore/               # Marionette + harness + component threads
+  tests/                   # Theory / integration executables
+  libspinscale/            # Submodule: coroutine + CPS runtime
+```
+
+**Named component threads**
+
+| Thread | Role |
+|------|------|
+| MRNTT | Puppeteer; runs tests, orchestrates harness lifecycle, SIGINT shutdown |
+| BODY | Primary worker component thread |
+| WORLD | Secondary worker component thread (cross-thread viral calls in sync-main demo) |
+| LEG | Tertiary worker component thread |
+
+**Bootstrap sequence:** CRT JOLT → marionette `preLoopHook` holds non-viral `initializeCReq` → harness JOLT/start → parallel body/world/leg init via `co::Group` → test body → parallel finalize → jolt/exit puppet threads.
+
+Reference: salmanoff (`docs/3rdParty/smo`) is the production idiom; this repo is the coroutine staging app.
+
+## Per-component posting invokers
+
+Each component header owns its thread tag and invoker typedefs (no shared `threadTags.h`):
+
+| Header | Tag | Typedefs |
+|--------|-----|----------|
+| `marionette/marionette.h` | `MrnttThreadTag` | `MrnttNonViralPostingInvoker`, `MrnttViralPostingInvoker<T>` |
+| `body/body.h` | `BodyThreadTag` | `BodyNonViralPostingInvoker`, `BodyViralPostingInvoker<T>` |
+| `world/world.h` | `WorldThreadTag` | same pattern |
+| `leg/leg.h` | `LegThreadTag` | same pattern |
+
+## Viral vs non-viral lifetime boundary
+
+- **Non-viral** (`MrnttNonViralPostingInvoker`): top-level hook callers (`preLoopHook`, shutdown paths). Hooks call `holdInitializeCReq` / `holdFinalizeCReq`, which store the invoker and pass a completion lambda that drives program state (run test, exit loop, shutdown).
+- **Viral** (`MrnttViralPostingInvoker<void>`, `BodyViralPostingInvoker<void>`, …): orchestrator-facing `initializeCReq` / `finalizeCReq` on `TestHarness` and named component threads (body, world, leg). Invoked via `co_await` from parent coroutines — not from hooks directly.
+- **Harness init:** `TestHarness::initializeCReq` jolt/start puppet threads, then sequentially `co_await`s body/world/leg viral `initializeCReq`.
+
+## Coro completion contract
+
+Non-viral invokers wire the caller's completion lambda at construction. On `co_return`, `final_suspend` invokes that lambda automatically (after rethrowing if `exceptionPtr` is set). **Never call the completion lambda manually inside the coro body.**
+
+`PuppetApplication` batch ops (`joltAllPuppetThreadsCReq`, etc.) are `ViralNonPostingInvoker` member coroutines on the caller thread (symmetric transfer); `TestHarness::initializeCReq` co_awaits them directly.
+
+**Parameter order:** `*CReq` entry points take `(std::exception_ptr&, std::function<void()> callback)` only; context via `this`.
+
 ## Build (CMake + C++23)
 
-This repository uses CMake. The [`libspinscale`](libspinscale) git submodule is included and built as part of the tree so this repo can serve as a staging area for the joint coroutines + spinscale migration; coroutine theory executables in `src/` still use the local prototype headers under [`src/`](src/) until that migration lands in both repositories.
+The [`libspinscale`](libspinscale) git submodule is built as part of the tree.
 
 ### Prerequisites
 
 - `cmake` (3.16+)
 - A C++ compiler with C++23 coroutine support
-- Boost (`libboost-dev` / distro equivalent): `system` for the `src/` executables; `log` as well when building the `libspinscale` submodule
+- Boost (`libboost-dev` / distro equivalent): `system` for executables; `log` when building `libspinscale`
 
 ### Submodule and Build (Out-of-Tree)
 
@@ -63,18 +114,15 @@ Optional: `-DENABLE_LTO=ON` for link-time optimization.
 
 ### Run Binaries
 
-```bash
-./src/group-edge-test
-./src/group-timer-test
-./src/sync-main-drives-continuation
-```
-
-### Add New Theory Executables
-
-1. Add a new source file under `src/`.
-2. Register a new target in [`src/CMakeLists.txt`](src/CMakeLists.txt) via `add_coroutines_executable(...)`.
-3. Rebuild from your build tree:
+Binaries appear under `build/ctestcore/`:
 
 ```bash
-cmake --build . -j"$(nproc)"
+./ctestcore/ctest-sync-main
+./ctestcore/ctest-group-edge-test
+./ctestcore/ctest-group-timer-test
+./ctestcore/ctest-group-smoke
 ```
+
+### libspinscale puppet lifetime ops
+
+`PuppetApplication::*CReq` are public member coroutines using `co::Group<PuppetThread::ViralThreadLifetimeMgmtInvoker>` over the existing `*ThreadAReq` bridge.
