@@ -5,7 +5,7 @@ namespace sscl::co::group_smoke {
 
 [[gnu::used]] void instantiateGroupTemplate()
 {
-	using IntGroup = Group<ctest::leg::LegViralPostingInvoker<int>>;
+	using IntGroup = Group;
 	(void)sizeof(IntGroup);
 }
 

@@ -5,6 +5,7 @@
 #include <harness/harness.h>
 #include <harnessComponent.h>
 #include <leg/leg.h>
+#include <spinscale/co/group.h>
 #include <world/world.h>
 
 namespace ctest {
@@ -99,9 +100,15 @@ mrntt::MrnttViralPostingInvoker<void> TestHarness::initializeCReq(
 	co_await joltAllPuppetThreadsCReq(exceptionPtr, noopCallback);
 	co_await startAllPuppetThreadsCReq(exceptionPtr, noopCallback);
 
-	co_await body.initializeCReq(exceptionPtr, noopCallback);
-	co_await world.initializeCReq(exceptionPtr, noopCallback);
-	co_await leg.initializeCReq(exceptionPtr, noopCallback);
+	sscl::co::Group componentInitGroup;
+	auto bodyInit = body.initializeCReq(exceptionPtr, noopCallback);
+	auto worldInit = world.initializeCReq(exceptionPtr, noopCallback);
+	auto legInit = leg.initializeCReq(exceptionPtr, noopCallback);
+	componentInitGroup.add(bodyInit);
+	componentInitGroup.add(worldInit);
+	componentInitGroup.add(legInit);
+	co_await componentInitGroup.getAwaitAllSettlementsInvoker();
+	componentInitGroup.checkForAndReThrowGroupExceptions();
 
 	co_return;
 }
@@ -112,9 +119,15 @@ mrntt::MrnttViralPostingInvoker<void> TestHarness::finalizeCReq(
 {
 	std::function<void()> noopCallback;
 
-	co_await body.finalizeCReq(exceptionPtr, noopCallback);
-	co_await world.finalizeCReq(exceptionPtr, noopCallback);
-	co_await leg.finalizeCReq(exceptionPtr, noopCallback);
+	sscl::co::Group componentFinalizeGroup;
+	auto bodyFinalize = body.finalizeCReq(exceptionPtr, noopCallback);
+	auto worldFinalize = world.finalizeCReq(exceptionPtr, noopCallback);
+	auto legFinalize = leg.finalizeCReq(exceptionPtr, noopCallback);
+	componentFinalizeGroup.add(bodyFinalize);
+	componentFinalizeGroup.add(worldFinalize);
+	componentFinalizeGroup.add(legFinalize);
+	co_await componentFinalizeGroup.getAwaitAllSettlementsInvoker();
+	componentFinalizeGroup.checkForAndReThrowGroupExceptions();
 
 	co_await exitAllPuppetThreadsCReq(exceptionPtr, noopCallback);
 

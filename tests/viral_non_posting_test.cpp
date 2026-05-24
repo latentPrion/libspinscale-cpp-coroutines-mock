@@ -35,8 +35,8 @@ using TestViralNonPostingInvoker = ViralNonPostingInvoker<T>;
 
 using TestDriver = TestViralNonPostingInvoker<int>;
 using TestVoidDriver = TestViralNonPostingInvoker<void>;
-using TestIntGroup = Group<TestViralNonPostingInvoker<int>>;
-using TestVoidGroup = Group<TestViralNonPostingInvoker<void>>;
+using TestIntGroup = Group;
+using TestVoidGroup = Group;
 
 struct ThreadIdPair
 {
@@ -586,7 +586,7 @@ TestDriver testGroupMixedImmediateAndDelayed()
 	}
 
 	for (auto &descriptor : allDescriptors) {
-		const int label = readCompletedLabel(descriptor.invoker.get());
+		const int label = readCompletedLabel(descriptor.invokerAs<TestViralNonPostingInvoker<int>>());
 		if (label != 11 && label != delayShortMs) {
 			throw std::runtime_error(
 				"groupMixedImmediateAndDelayed: unexpected label");

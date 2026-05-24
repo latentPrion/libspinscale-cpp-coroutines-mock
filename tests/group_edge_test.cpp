@@ -55,8 +55,8 @@ template <typename T>
 using GroupEdgeTestViralInvoker = ViralPostingInvoker<
 	GroupEdgeTestPostingPromise, T>;
 
-using GroupEdgeTestViralIntGroup = Group<GroupEdgeTestViralInvoker<int>>;
-using GroupEdgeTestViralVoidGroup = Group<GroupEdgeTestViralInvoker<void>>;
+using GroupEdgeTestViralIntGroup = Group;
+using GroupEdgeTestViralVoidGroup = Group;
 
 struct TimerAsyncWaitAwaiter
 {
@@ -165,7 +165,7 @@ void assertDescriptorCompleted(
 			+ ": expected COMPLETED settlement");
 	}
 
-	if (readCompletedLabel(descriptor.invoker.get()) != expectedLabel) {
+	if (readCompletedLabel(descriptor.invokerAs<GroupEdgeTestViralInvoker<int>>()) != expectedLabel) {
 		throw std::runtime_error(
 			std::string(testLogPrefix) + ": settlement label mismatch");
 	}
@@ -371,7 +371,7 @@ GroupEdgeTestViralInvoker<int> testAllCompleteBeforeCoAwait()
 	}
 
 	for (auto &descriptor : allDescriptors) {
-		const int label = readCompletedLabel(descriptor.invoker.get());
+		const int label = readCompletedLabel(descriptor.invokerAs<GroupEdgeTestViralInvoker<int>>());
 		if (label != 10 && label != 20 && label != 30) {
 			throw std::runtime_error("unexpected immediate settlement label");
 		}
@@ -586,7 +586,7 @@ GroupEdgeTestViralInvoker<int> testWrongAwaitInvokerOrder()
 	for (auto &descriptor : allDescriptors) {
 		assertDescriptorCompleted(
 			descriptor,
-			readCompletedLabel(descriptor.invoker.get()));
+			readCompletedLabel(descriptor.invokerAs<GroupEdgeTestViralInvoker<int>>()));
 	}
 
 	auto [firstDescriptor, allAfterFirst] = co_await awaitFirstHandle;
@@ -598,7 +598,7 @@ GroupEdgeTestViralInvoker<int> testWrongAwaitInvokerOrder()
 
 	assertDescriptorCompleted(
 		firstDescriptor,
-		readCompletedLabel(firstDescriptor.invoker.get()));
+		readCompletedLabel(firstDescriptor.invokerAs<GroupEdgeTestViralInvoker<int>>()));
 
 	if (allAfterFirst.size() != 2) {
 		throw std::runtime_error(
@@ -673,7 +673,7 @@ GroupEdgeTestViralInvoker<int> testDoubleCoAwaitSameAwaitFirst()
 	assertDescriptorCompleted(firstDescriptorA, delayShortMs);
 	assertDescriptorCompleted(firstDescriptorB, delayShortMs);
 
-	if (&firstDescriptorA.invoker.get() != &firstDescriptorB.invoker.get()) {
+	if (&firstDescriptorA.invokerAs<GroupEdgeTestViralInvoker<int>>() != &firstDescriptorB.invokerAs<GroupEdgeTestViralInvoker<int>>()) {
 		throw std::runtime_error(
 			"double await-first on same handle should return the same first settlement");
 	}
@@ -728,7 +728,7 @@ GroupEdgeTestViralInvoker<int> testTwoAwaitFirstHandlesSequentially()
 
 	assertDescriptorCompleted(firstDescriptorB, delayShortMs);
 
-	if (&firstDescriptorA.invoker.get() != &firstDescriptorB.invoker.get()) {
+	if (&firstDescriptorA.invokerAs<GroupEdgeTestViralInvoker<int>>() != &firstDescriptorB.invokerAs<GroupEdgeTestViralInvoker<int>>()) {
 		throw std::runtime_error(
 			"second await-first handle should still report the sticky first settlement");
 	}
@@ -870,7 +870,7 @@ GroupEdgeTestViralInvoker<int> testShortTimerAddedAfterLongStillWinsRace()
 
 	assertDescriptorCompleted(firstDescriptor, delayShortMs);
 
-	if (&firstDescriptor.invoker.get() != &shortInvoker) {
+	if (&firstDescriptor.invokerAs<GroupEdgeTestViralInvoker<int>>() != &shortInvoker) {
 		throw std::runtime_error(
 			"short timer should win await-first even when added after the long timer");
 	}
@@ -928,7 +928,7 @@ GroupEdgeTestViralInvoker<int> testReturnValuesRemainReadableAfterAwaitFirst()
 	assertDescriptorCompleted(firstDescriptor, delayShortMs);
 
 	const int fastLabelFromDescriptor = readCompletedLabel(
-		firstDescriptor.invoker.get());
+		firstDescriptor.invokerAs<GroupEdgeTestViralInvoker<int>>());
 	const int fastLabelFromLocal = readCompletedLabel(fastInvoker);
 
 	if (fastLabelFromDescriptor != fastLabelFromLocal) {

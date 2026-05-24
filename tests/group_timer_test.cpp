@@ -49,7 +49,7 @@ template <typename T>
 using GroupTimerTestViralInvoker = ViralPostingInvoker<
 	GroupTimerTestPostingPromise, T>;
 
-using GroupTimerTestIntGroup = Group<GroupTimerTestViralInvoker<int>>;
+using GroupTimerTestIntGroup = Group;
 
 using CancelableDeadlineTimer = std::shared_ptr<boost::asio::deadline_timer>;
 
@@ -196,7 +196,7 @@ void assertSettlementCompleted(
 			+ std::to_string(expectedLabelMilliseconds) + "ms");
 	}
 
-	const int label = settlementReturnLabel(descriptor.invoker.get());
+	const int label = settlementReturnLabel(descriptor.invokerAs<GroupTimerTestViralInvoker<int>>());
 
 	if (label != expectedLabelMilliseconds) {
 		throw std::runtime_error(
@@ -261,7 +261,7 @@ GroupTimerTestViralInvoker<int> runGroupTimerRaceTest()
 
 	assertSettlementCompleted(firstSettlement, timerDelayShortMs);
 
-	if (&firstSettlement.invoker.get() != &invokerShort) {
+	if (&firstSettlement.invokerAs<GroupTimerTestViralInvoker<int>>() != &invokerShort) {
 		throw std::runtime_error(
 			std::string(testLogPrefix)
 			+ ": first settlement was not the shortest timer invoker");
@@ -294,7 +294,7 @@ GroupTimerTestViralInvoker<int> runGroupTimerRaceTest()
 	for (auto &descriptor : allSettlements) {
 		assertSettlementCompleted(
 			descriptor,
-			settlementReturnLabel(descriptor.invoker.get()));
+			settlementReturnLabel(descriptor.invokerAs<GroupTimerTestViralInvoker<int>>()));
 	}
 
 	assertSettlementCompleted(allSettlementsAfterFirst[0], timerDelayShortMs);
@@ -329,7 +329,7 @@ GroupTimerTestViralInvoker<int> runGroupTimerCancelLongAfterAwaitFirst()
 
 	assertSettlementCompleted(firstSettlement, timerDelayShortMs);
 
-	if (&firstSettlement.invoker.get() != &invokerShort) {
+	if (&firstSettlement.invokerAs<GroupTimerTestViralInvoker<int>>() != &invokerShort) {
 		throw std::runtime_error(
 			std::string(testLogPrefix)
 			+ ": cancel test: first settlement was not the shortest timer");
@@ -377,7 +377,7 @@ GroupTimerTestViralInvoker<int> runGroupTimerCancelLongAfterAwaitFirst()
 	assertSettlementCompleted(allSettlements[1], timerDelayMediumMs);
 	assertSettlementCompleted(allSettlements[2], timerDelayLongMs);
 
-	if (&allSettlements[2].invoker.get() != &invokerLong) {
+	if (&allSettlements[2].invokerAs<GroupTimerTestViralInvoker<int>>() != &invokerLong) {
 		throw std::runtime_error(
 			std::string(testLogPrefix)
 			+ ": cancel test: long settlement invoker mismatch");

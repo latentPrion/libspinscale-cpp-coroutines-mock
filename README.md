@@ -80,7 +80,7 @@ Each component header owns its thread tag and invoker typedefs (no shared `threa
 
 - **Non-viral** (`MrnttNonViralPostingInvoker`): top-level hook callers (`preLoopHook`, shutdown paths). Hooks call `holdInitializeCReq` / `holdFinalizeCReq`, which store the invoker and pass a completion lambda that drives program state (run test, exit loop, shutdown).
 - **Viral** (`MrnttViralPostingInvoker<void>`, `BodyViralPostingInvoker<void>`, …): orchestrator-facing `initializeCReq` / `finalizeCReq` on `TestHarness` and named component threads (body, world, leg). Invoked via `co_await` from parent coroutines — not from hooks directly.
-- **Harness init:** `TestHarness::initializeCReq` jolt/start puppet threads, then sequentially `co_await`s body/world/leg viral `initializeCReq`.
+- **Harness init:** `TestHarness::initializeCReq` jolt/start puppet threads, then runs body/world/leg viral `initializeCReq` in parallel via `co::Group`. Finalize uses the same pattern before `exitAllPuppetThreadsCReq`.
 
 ## Coro completion contract
 
@@ -125,4 +125,4 @@ Binaries appear under `build/ctestcore/`:
 
 ### libspinscale puppet lifetime ops
 
-`PuppetApplication::*CReq` are public member coroutines using `co::Group<PuppetThread::ViralThreadLifetimeMgmtInvoker>` over the existing `*ThreadAReq` bridge.
+`PuppetApplication::*CReq` are public member coroutines using `co::Group` over the existing `*ThreadAReq` bridge.
