@@ -39,54 +39,39 @@ The intended outcome is coroutine-based code that still behaves like the current
 - Do not modify files inside the referenced `smo` repository from this repo.
 - Use this repo to document, prototype, and reason about migration mechanics first.
 
-## Application layout (salmanoff paradigm)
+## Repository Layout
 
-This repo now mirrors salmanoff's bootstrap layering, adapted to a test app with four
-named component threads (MRNTT, body, world, leg):
+This repo now keeps the reusable coroutine runtime and its GoogleTest coverage in
+the `libspinscale` submodule. The old marionette executable test app has been
+ported into `libspinscale/tests` and removed from the root repository.
 
 ```
 coroutines/
-  main.cpp                 # CRT JOLT + join marionette
-  ctestcore/               # Marionette + harness + component threads
-  tests/                   # Theory / integration executables
   libspinscale/            # Submodule: coroutine + CPS runtime
 ```
 
-**Named component threads**
+The ported tests include private harness primitives under
+`libspinscale/tests/support/` for exercising posting promises across distinct
+OS threads. Those tests cover the former `Group`, viral non-posting, timer, and
+component-continuation scenarios in a reusable GoogleTest form.
 
-| Thread | Role |
-|------|------|
-| MRNTT | Puppeteer; runs tests, orchestrates harness lifecycle, SIGINT shutdown |
-| BODY | Primary worker component thread |
-| WORLD | Secondary worker component thread (cross-thread viral calls in sync-main demo) |
-| LEG | Tertiary worker component thread |
+## Viral vs Non-Viral Invokers
 
-**Bootstrap sequence:** CRT JOLT → marionette `preLoopHook` holds non-viral `initializeCReq` → harness JOLT/start → parallel body/world/leg init via `co::Group` → test body → parallel finalize → jolt/exit puppet threads.
-
-Reference: salmanoff (`docs/3rdParty/smo`) is the production idiom; this repo is the coroutine staging app.
-
-## Per-component posting invokers
-
-Each component header owns its thread tag and invoker typedefs (no shared `threadTags.h`):
-
-| Header | Tag | Typedefs |
-|--------|-----|----------|
-| `marionette/marionette.h` | `MrnttThreadTag` | `MrnttNonViralPostingInvoker`, `MrnttViralPostingInvoker<T>` |
-| `body/body.h` | `BodyThreadTag` | `BodyNonViralPostingInvoker`, `BodyViralPostingInvoker<T>` |
-| `world/world.h` | `WorldThreadTag` | same pattern |
-| `leg/leg.h` | `LegThreadTag` | same pattern |
-
-## Viral vs non-viral lifetime boundary
-
-- **Non-viral** (`MrnttNonViralPostingInvoker`): top-level hook callers (`preLoopHook`, shutdown paths). Hooks call `holdInitializeCReq` / `holdFinalizeCReq`, which store the invoker and pass a completion lambda that drives program state (run test, exit loop, shutdown).
-- **Viral** (`MrnttViralPostingInvoker<void>`, `BodyViralPostingInvoker<void>`, …): orchestrator-facing `initializeCReq` / `finalizeCReq` on `TestHarness` and named component threads (body, world, leg). Invoked via `co_await` from parent coroutines — not from hooks directly.
-- **Harness init:** `TestHarness::initializeCReq` jolt/start puppet threads, then runs body/world/leg viral `initializeCReq` in parallel via `co::Group`. Finalize uses the same pattern before `exitAllPuppetThreadsCReq`.
+- **Non-viral posting invokers** are coroutine entry points that are not
+  `co_await`ed. The caller supplies exception storage and a completion lambda,
+  and the invoker object must stay alive until completion.
+- **Viral posting invokers** are awaitable coroutine results. A caller
+  `co_await`s them, and posting promises move callee execution to the target
+  component thread before posting resume back to the caller thread.
+- **Viral non-posting invokers** run on the caller thread and use direct
+  symmetric-transfer-style resumption rather than cross-thread posting.
 
 ## Coro completion contract
 
 Non-viral invokers wire the caller's completion lambda at construction. On `co_return`, `final_suspend` invokes that lambda automatically (after rethrowing if `exceptionPtr` is set). **Never call the completion lambda manually inside the coro body.**
 
-`PuppetApplication` batch ops (`joltAllPuppetThreadsCReq`, etc.) are `ViralNonPostingInvoker` member coroutines on the caller thread (symmetric transfer); `TestHarness::initializeCReq` co_awaits them directly.
+`PuppetApplication` batch ops (`joltAllPuppetThreadsCReq`, etc.) are
+`ViralNonPostingInvoker` member coroutines on the caller thread.
 
 **Parameter order:** `*CReq` entry points take `(std::exception_ptr&, std::function<void()> callback)` only; context via `this`.
 
@@ -98,7 +83,7 @@ The [`libspinscale`](libspinscale) git submodule is built as part of the tree.
 
 - `cmake` (3.16+)
 - A C++ compiler with C++23 coroutine support
-- Boost (`libboost-dev` / distro equivalent): `system` for executables; `log` when building `libspinscale`
+- Boost (`libboost-dev` / distro equivalent): `system` and `log` for `libspinscale`
 
 ### Submodule and Build (Out-of-Tree)
 
@@ -112,15 +97,14 @@ cmake --build . -j"$(nproc)"
 
 Optional: `-DENABLE_LTO=ON` for link-time optimization.
 
-### Run Binaries
+### Run Tests
 
-Binaries appear under `build/ctestcore/`:
+Enable the libspinscale GoogleTest targets and run them with CTest:
 
 ```bash
-./ctestcore/ctest-sync-main
-./ctestcore/ctest-group-edge-test
-./ctestcore/ctest-group-timer-test
-./ctestcore/ctest-group-smoke
+cmake .. -DCMAKE_BUILD_TYPE=Debug -DENABLE_TESTS=ON -DLIBSPINSCALE_BUILD_TESTS=ON
+cmake --build . -j"$(nproc)"
+ctest --output-on-failure
 ```
 
 ### libspinscale puppet lifetime ops

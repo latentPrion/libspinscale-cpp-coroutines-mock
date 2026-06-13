@@ -2,6 +2,8 @@ cmake_minimum_required(VERSION 3.16)
 
 project(coroutines VERSION 0.1.0 LANGUAGES CXX)
 
+enable_testing()
+
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -61,8 +63,3 @@ if(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
 endif()
 
 add_subdirectory(libspinscale)
-
-find_package(Boost REQUIRED COMPONENTS system)
-find_package(Threads REQUIRED)
-
-add_subdirectory(ctestcore)
