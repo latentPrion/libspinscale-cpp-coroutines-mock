@@ -325,9 +325,9 @@ No additional scheduling boilerplate should be required.
 
 ## Assumptions and Defaults
 
-- Compile-time aliasing with global context references is implemented in
-  `src/sync_main_drives_continuation.cpp` (per-thread tags, posting-promise
-  aliases, and invoker aliases) and `src/promises.h` / `src/invokers.h`.
+- Compile-time aliasing with thread-role context references is exercised by
+  `libspinscale/tests/support/threadHarness.h` and the cross-thread coroutine
+  tests under `libspinscale/tests/co/`.
 - Existing modularity constraints apply:
   - no duplicated scheduling logic
   - configurable thread-target behavior isolated in named abstractions
